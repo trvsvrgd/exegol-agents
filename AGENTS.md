@@ -7,13 +7,15 @@
 | Service | Port | Command | Notes |
 |---------|------|---------|-------|
 | FastAPI backend | 8000 | `cd backend && python3 -m uvicorn app.main:app --reload` | Requires `backend/.env` with `GOOGLE_API_KEY` for `/api/run` |
-| Next.js frontend | 3000 | `cd frontend && npm run dev` | Boilerplate UI; no custom pages yet |
+| Next.js frontend | 3000 | `cd frontend && npm run dev` | Control dashboard: chat, activity feed, plan viewer |
 
 ### Running the backend
 
 - Start from the `backend/` directory: `python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 - `GET /` returns `{"message":"Hello from Exegol"}` — use this to verify the server is up.
-- `POST /api/run` requires a valid `GOOGLE_API_KEY` in `backend/.env`. Without it, the endpoint returns 500.
+- `GET /api/status` returns the latest graph execution state (for dashboard polling).
+- `GET /api/plan` returns the raw markdown from `workspace/plan.md`.
+- `POST /api/run` requires a valid `GOOGLE_API_KEY` in `backend/.env`. Without it, the endpoint returns 500. Runs in background; poll `/api/status` for progress.
 - If `backend/.env` doesn't exist, copy from `backend/.env.example`. **Never overwrite an existing `.env`** — it may contain user-configured secrets like `LANGCHAIN_API_KEY`. Instead, only add missing keys.
 
 ### Running the frontend
