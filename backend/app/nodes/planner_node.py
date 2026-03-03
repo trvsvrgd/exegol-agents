@@ -11,7 +11,7 @@ WORKSPACE_PLAN_PATH = Path(__file__).resolve().parent.parent.parent.parent / "wo
 
 def planner_node(state: GraphState) -> dict:
     """Reads user message and plan.md, outputs a task for the coder."""
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     plan_content = ""
     if WORKSPACE_PLAN_PATH.exists():
         plan_content = WORKSPACE_PLAN_PATH.read_text(encoding="utf-8")
