@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+langgraph
+langchain-google-genai
+langchain-community
+docker
+mcp

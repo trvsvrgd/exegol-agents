@@ -1,0 +1,21 @@
+# Exegol V2 Cursor Rules
+
+## Source of Truth
+- **TECH_SPEC.md**: Project vision, stack, constraints.
+- **PLAN.md**: Roadmap; update before new features.
+- Resolve conflicts with user prompt by asking.
+
+## Coding
+- Skinny prompts, fat specs. Implement from spec context.
+- Atomic commits; suggest messages after PLAN steps.
+- No hardcoded secrets; use env vars / `backend/.env`.
+
+## Testing
+- New logic → corresponding test in `tests/`.
+- After code: run `pytest tests/` and fix until green.
+- YOLO mode: fix iteratively from test output.
+
+## Stack-Specific
+- **Python**: type hints, pathlib for paths, dotenv before imports.
+- **LangGraph**: state in `app/state.py`, nodes return partial state dicts.
+- **FastAPI**: Pydantic models for request/response bodies.
