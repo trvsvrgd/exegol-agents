@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 
@@ -11,7 +11,7 @@ WORKSPACE_PLAN_PATH = Path(__file__).resolve().parent.parent.parent.parent / "wo
 
 def planner_node(state: GraphState) -> dict:
     """Reads user message and plan.md, outputs a task for the coder."""
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    llm = ChatOllama(model="qwen2.5-coder")
     plan_content = ""
     if WORKSPACE_PLAN_PATH.exists():
         plan_content = WORKSPACE_PLAN_PATH.read_text(encoding="utf-8")
