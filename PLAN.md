@@ -24,3 +24,4 @@
 
 ## Future Enhancements
 - Enhancement: Create a start_dev.ps1 script at the root of the project that automatically:Checks if the backend venv exists (creates it if it doesn't).Activates the venv and starts the FastAPI server in the background.Navigates to the frontend folder and runs npm run dev.Opens your browser to the local Next.js dashboard.This turns a multi-terminal startup process into a single double-click.
+- UI updates to thematically incorporate, lightning, sith, and star wars aesthetics

@@ -4,5 +4,6 @@ python-dotenv
 langgraph
 langchain-google-genai
 langchain-community
+langchain-core
 docker
 mcp
