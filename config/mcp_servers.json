@@ -1,6 +1,6 @@
 {
   "filesystem": {
-    "command": "npx",
+    "command": "npx.cmd",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "workspace"]
   }
 }
