@@ -41,17 +41,31 @@ def _merge_usage(acc: dict | None, new: dict | None) -> dict:
     return out
 
 
-async def _run_coder_with_tools(state: GraphState) -> tuple[str, dict | None]:
-    """Run the coder with MCP filesystem tools, handling tool calls. Returns (output, aggregated_usage)."""
+def _format_tool_results(entries: list[tuple[str, dict, str]]) -> str:
+    """Format tool call entries for evaluator context. Truncate long content."""
+    lines = []
+    for name, args, result in entries:
+        args_str = json.dumps(args, default=str)[:200]
+        result_str = str(result)[:500] if result else "(empty)"
+        if len(str(result)) > 500:
+            result_str += "..."
+        lines.append(f"- {name}({args_str}): {result_str}")
+    return "\n".join(lines) if lines else ""
+
+
+async def _run_coder_with_tools(state: GraphState) -> tuple[str, dict | None, list[tuple[str, dict, str]]]:
+    """Run the coder with MCP filesystem tools. Returns (output, aggregated_usage, tool_results)."""
     task, user_text = _get_task_and_context(state)
     llm = ChatOllama(base_url="http://localhost:11434", model="qwen2.5-coder")
     aggregated_usage: dict | None = None
+    tool_entries: list[tuple[str, dict, str]] = []
 
     async with get_filesystem_tools() as (session, tools):
         llm_with_tools = llm.bind_tools(tools)
 
         system = """You are a coder with access to the local filesystem. You can read files, write files, and list directories.
-Execute the task you are given. Use the filesystem tools when you need to read or write code. Be concise."""
+Execute the task you are given. Use the filesystem tools when you need to read or write code.
+After using tools, always summarize what you did: list files created or modified with their key contents (or snippets), so the evaluator can verify your work. Be concise."""
 
         messages = [
             SystemMessage(content=system),
@@ -68,11 +82,11 @@ Execute the task you are given. Use the filesystem tools when you need to read o
             )
 
             if not isinstance(response, AIMessage):
-                return getattr(response, "content", str(response)), aggregated_usage
+                return getattr(response, "content", str(response)), aggregated_usage, tool_entries
 
             tool_calls = getattr(response, "tool_calls", None) or []
             if not tool_calls:
-                return response.content or "", aggregated_usage
+                return response.content or "", aggregated_usage, tool_entries
 
             messages.append(response)
 
@@ -94,6 +108,8 @@ Execute the task you are given. Use the filesystem tools when you need to read o
                 else:
                     result = f"Tool {name} not found"
 
+                tool_entries.append((name, args, str(result)))
+
                 tool_msg_id = (
                     tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 ) or f"call_{name}"
@@ -104,21 +120,25 @@ Execute the task you are given. Use the filesystem tools when you need to read o
         return (
             response.content if hasattr(response, "content") else "Max tool rounds reached",
             aggregated_usage,
+            tool_entries,
         )
 
 
 def coder_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
     """Uses ChatOllama with MCP filesystem tools. Handles tool calls (read_file, etc.)."""
     try:
-        output, usage = asyncio.run(_run_coder_with_tools(state))
+        output, usage, tool_entries = asyncio.run(_run_coder_with_tools(state))
     except Exception as e:
         output = f"[Error] {e}"
         usage = None
+        tool_entries = []
 
-    out = {
+    out: dict = {
         "messages": state["messages"] + [{"role": "coder", "content": output}],
         "status": "completed",
     }
     if usage:
         out[LOG_TOKEN_USAGE_KEY] = usage
+    if tool_entries:
+        out["coder_tool_results"] = _format_tool_results(tool_entries)
     return out

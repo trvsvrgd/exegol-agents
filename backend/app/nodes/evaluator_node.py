@@ -1,5 +1,6 @@
 """Evaluator node: LLM-based review of Coder output against user prompt and approved plan."""
 
+import logging
 from pathlib import Path
 
 import yaml
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.state import GraphState
 
+logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "config" / "agents.yaml"
 
 
@@ -58,6 +60,18 @@ def _get_coder_output(state: GraphState) -> str:
     return ""
 
 
+def _get_coder_context(state: GraphState) -> str:
+    """Build enriched context for evaluator: Coder text output + tool results."""
+    coder_output = _get_coder_output(state)
+    tool_results = state.get("coder_tool_results", "")
+    if not tool_results:
+        return coder_output
+    return f"""{coder_output}
+
+[Tool calls from Coder]:
+{tool_results}"""
+
+
 def evaluator_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
     """
     Review Coder output against the original user prompt and approved plan using local Ollama.
@@ -75,12 +89,15 @@ def evaluator_node(state: GraphState, config: RunnableConfig | None = None) -> d
 
     user_prompt = _get_user_prompt(state)
     approved_plan = state.get("current_plan", "")
-    coder_output = _get_coder_output(state)
+    coder_context = _get_coder_context(state)
+
+    logger.debug("Evaluator input: coder_context=%r", coder_context[:500] if coder_context else "")
 
     system = """You are an evaluator for a coding agent. Review the Coder's output against the original user request and the approved plan.
 
 Rules:
-- success: true only if the Coder fully addressed the user's request and followed the plan. Be strict but fair.
+- success: true if the Coder addressed the user's request and followed the plan. Be fair: for simple tasks (e.g. "write Hello World"), if the Coder created the expected file with correct content (visible in tool results or summary), mark success.
+- For trivial tasks, accept a reasonable claim of completion when the Coder's output or tool results show the expected files were created with appropriate content.
 - feedback: If success is false, give specific, actionable feedback (what was wrong, what to fix). If success is true, a brief confirmation is enough (or empty string).
 - Output ONLY valid JSON matching the schema. No markdown, no extra text.
 
@@ -90,8 +107,8 @@ Rules:
 
 Approved plan: {approved_plan or "(none)"}
 
-Coder output:
-{coder_output}
+Coder output (includes tool results when available):
+{coder_context}
 
 Evaluate and output JSON:"""
 
@@ -111,8 +128,14 @@ Evaluate and output JSON:"""
             if start >= 0 and end > start:
                 raw = raw[start:end]
         evaluation = parser.parse(raw)
+        logger.debug(
+            "Evaluator result: success=%s feedback=%r",
+            evaluation.success,
+            evaluation.feedback[:200] if evaluation.feedback else "",
+        )
     except Exception as e:
         evaluation = EvaluationResult(success=False, feedback=f"Evaluation parse error: {e}")
+        logger.debug("Evaluator parse error: %s", e)
 
     result = {"success": evaluation.success, "feedback": evaluation.feedback}
     message = (

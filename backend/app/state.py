@@ -8,3 +8,4 @@ class GraphState(TypedDict):
     evaluation_result: NotRequired[dict[str, Any]]
     evaluator_feedback: NotRequired[str]  # Feedback for Coder retry when evaluation fails
     retry_count: NotRequired[int]  # Coder retries after evaluator failure; max 3
+    coder_tool_results: NotRequired[str]  # Summary of tool calls from last Coder run for evaluator
