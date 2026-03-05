@@ -26,6 +26,8 @@ from app.nodes.evaluator_node import evaluator_node
 # Module-level checkpointer for state persistence across invoke and resume
 _checkpointer = InMemorySaver()
 
+MAX_CODER_RETRIES = 3
+
 def _wrap_node(node_name: str, node_fn):
     """Wrap a node to log start, end, duration, and token usage (if present)."""
 
@@ -62,7 +64,12 @@ def _route_after_evaluator(state: GraphState) -> str:
     """Route to END if evaluation passed, else back to Coder with feedback for retry."""
     result = state.get("evaluation_result") or {}
     success = result.get("success", False)
-    return "end" if success else "coder"
+    if success:
+        return "end"
+    retry_count = state.get("retry_count", 0)
+    if retry_count >= MAX_CODER_RETRIES:
+        return "end"  # Give up after max retries
+    return "coder"
 
 
 def _build_graph():
@@ -99,6 +106,7 @@ def build_and_stream_graph(prompt: str, thread_id: str | None = None):
         "messages": [{"role": "user", "content": prompt}],
         "current_plan": "",
         "status": "started",
+        "retry_count": 0,
     }
     merged: dict = dict(initial_state)
 
@@ -129,6 +137,7 @@ def run_graph(prompt: str, thread_id: str | None = None) -> dict:
         "messages": [{"role": "user", "content": prompt}],
         "current_plan": "",
         "status": "started",
+        "retry_count": 0,
     }
     result = graph.invoke(initial_state, config=config)
     return {

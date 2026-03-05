@@ -126,6 +126,7 @@ Evaluate and output JSON:"""
     }
     if not evaluation.success:
         update["evaluator_feedback"] = evaluation.feedback
+        update["retry_count"] = state.get("retry_count", 0) + 1
 
     usage = extract_usage_from_response(response)
     if usage is not None:

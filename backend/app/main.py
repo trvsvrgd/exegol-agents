@@ -1,9 +1,13 @@
 import ast
+import asyncio
+import os
 import re
 import threading
 import uuid
 from collections import deque
 from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks
@@ -127,6 +131,55 @@ def _run_resume_background(thread_id: str, decision: str, edited_plan: str | Non
 @app.get("/")
 async def root():
     return {"message": "Hello from Exegol"}
+
+
+def _check_ollama() -> tuple[bool, str]:
+    """Check if Ollama is reachable. Returns (ok, message)."""
+    try:
+        req = Request("http://localhost:11434/api/tags", method="GET")
+        with urlopen(req, timeout=3) as r:
+            if r.status == 200:
+                return True, "Ollama is running"
+            return False, f"Ollama returned status {r.status}"
+    except URLError as e:
+        return False, "Ollama is not running. Start it with: ollama serve"
+    except Exception as e:
+        return False, str(e)
+
+
+def _check_langsmith_config() -> tuple[bool, str | None]:
+    """
+    Check LangSmith config. Returns (ok, warning_message).
+    If tracing is on but API key is blank, returns (True, warning) so the app runs but user is informed.
+    """
+    tracing = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1", "yes")
+    api_key = (os.getenv("LANGCHAIN_API_KEY") or "").strip()
+    if tracing and not api_key:
+        return True, (
+            "LangSmith tracing is enabled but LANGCHAIN_API_KEY is empty. "
+            "You may see 401 auth errors in logs. "
+            "Either set LANGCHAIN_API_KEY in backend/.env or set LANGCHAIN_TRACING_V2=false to disable tracing."
+        )
+    return True, None
+
+
+@app.get("/api/health")
+async def get_health():
+    """
+    Return health status of required and optional services.
+    Used by the frontend to show clear error messages when components are missing.
+    """
+    ollama_ok, ollama_msg = await asyncio.to_thread(_check_ollama)
+    langsmith_ok, langsmith_warning = _check_langsmith_config()
+    return {
+        "backend": "ok",
+        "ollama": {"ok": ollama_ok, "message": ollama_msg},
+        "langsmith": {
+            "ok": langsmith_ok,
+            "warning": langsmith_warning,
+        },
+        "warnings": [w for w in [langsmith_warning] if w],
+    }
 
 
 @app.get("/api/status")

@@ -1,11 +1,18 @@
 @import "tailwindcss";
 
+/* Exegol - Sith / Star Wars inspired theme: dark, lightning accents, crimson power */
 :root {
-  --background: #0f0f0f;
-  --foreground: #e4e4e7;
-  --muted: #71717a;
-  --border: #27272a;
-  --accent: #3b82f6;
+  --background: #050508;
+  --foreground: #e8e6e3;
+  --muted: #6b7280;
+  --border: #1f1f24;
+  --accent: #dc2626;
+  --accent-light: #ef4444;
+  --lightning: #a78bfa;
+  --lightning-dim: #7c3aed;
+  --sith-amber: #d97706;
+  --success: #059669;
+  --error: #dc2626;
 }
 
 @theme inline {

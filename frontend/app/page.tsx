@@ -31,6 +31,13 @@ type StatusResponse = {
 
 type PlanResponse = { content: string; error?: string };
 
+type HealthResponse = {
+  backend: string;
+  ollama: { ok: boolean; message: string };
+  langsmith: { ok: boolean; warning: string | null };
+  warnings: string[];
+};
+
 function extractTaskDescription(interrupt: InterruptPayload | undefined): string {
   if (!interrupt) return "";
   const arr = Array.isArray(interrupt) ? interrupt : [interrupt];
@@ -70,14 +77,32 @@ export default function Dashboard() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [plan, setPlan] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [backendUnreachable, setBackendUnreachable] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`);
+      if (res.ok) {
+        setHealth((await res.json()) as HealthResponse);
+        setBackendUnreachable(false);
+      }
+    } catch {
+      setBackendUnreachable(true);
+      setHealth(null);
+    }
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/status`);
-      if (res.ok) setStatus((await res.json()) as StatusResponse);
+      if (res.ok) {
+        setStatus((await res.json()) as StatusResponse);
+        setBackendUnreachable(false);
+      }
     } catch {
-      // Ignore fetch errors during polling
+      setBackendUnreachable(true);
     }
   }, []);
 
@@ -109,10 +134,16 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    fetchHealth();
     fetchStatus();
     fetchPlan();
     return () => stopPolling();
-  }, [fetchStatus, fetchPlan, stopPolling]);
+  }, [fetchHealth, fetchStatus, fetchPlan, stopPolling]);
+
+  useEffect(() => {
+    const t = setInterval(fetchHealth, 15000);
+    return () => clearInterval(t);
+  }, [fetchHealth]);
 
   useEffect(() => {
     if (
@@ -179,17 +210,47 @@ export default function Dashboard() {
   const evalResult = status?.evaluation_result;
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">
+    <div className="flex h-screen flex-col bg-[#050508] text-zinc-100">
+      <header className="border-b border-[#1f1f24] px-6 py-4 bg-black/30">
+        <h1 className="text-xl font-semibold tracking-tight bg-gradient-to-r from-red-600 via-amber-600 to-violet-500 bg-clip-text text-transparent">
           Exegol Control Dashboard
         </h1>
+        <p className="text-xs text-zinc-500 mt-1">Sith-powered agent orchestration</p>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Main content: Activity Feed */}
-        <main className="flex-1 flex flex-col min-w-0 border-r border-zinc-800">
+        <main className="flex-1 flex flex-col min-w-0 border-r border-[#1f1f24]">
           <div className="flex-1 overflow-auto p-6 space-y-6">
+            {backendUnreachable && (
+              <div className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3">
+                <p className="font-medium text-red-400">Backend unreachable</p>
+                <p className="mt-1 text-sm text-zinc-300">
+                  Cannot connect to the FastAPI backend at {API_BASE}. Make sure the backend is running:
+                </p>
+                <code className="mt-2 block text-xs text-zinc-400">
+                  cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+                </code>
+              </div>
+            )}
+
+            {health && !health.ollama.ok && (
+              <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
+                <p className="font-medium text-amber-400">Ollama is not running</p>
+                <p className="mt-1 text-sm text-zinc-300">{health.ollama.message}</p>
+                <p className="mt-2 text-xs text-zinc-400">Start Ollama, then run: ollama pull qwen2.5-coder</p>
+              </div>
+            )}
+
+            {health?.warnings && health.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
+                <p className="font-medium text-amber-400">Configuration warning</p>
+                {health.warnings.map((w, i) => (
+                  <p key={i} className="mt-1 text-sm text-zinc-300">{w}</p>
+                ))}
+              </div>
+            )}
+
             <section>
               <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
                 Status
@@ -197,14 +258,14 @@ export default function Dashboard() {
               <div
                 className={`rounded-lg border px-4 py-3 ${
                   status?.status === "running"
-                    ? "border-blue-500/50 bg-blue-500/5"
+                    ? "border-violet-500/50 bg-violet-500/5 shadow-[0_0_12px_rgba(139,92,246,0.2)]"
                     : status?.status === "awaiting_approval"
                       ? "border-amber-500/50 bg-amber-500/5"
                       : status?.status === "done"
                         ? "border-emerald-500/30 bg-emerald-500/5"
                         : status?.status === "error"
-                          ? "border-red-500/30 bg-red-500/5"
-                          : "border-zinc-700 bg-zinc-900/50"
+                          ? "border-red-500/40 bg-red-500/10"
+                          : "border-[#1f1f24] bg-zinc-900/30"
                 }`}
               >
                 <p className="font-medium">
@@ -241,7 +302,7 @@ export default function Dashboard() {
                 <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
                   Prompt
                 </h2>
-                <div className="rounded-lg border border-zinc-700 bg-zinc-900/50 px-4 py-3">
+                <div className="rounded-lg border border-[#1f1f24] bg-zinc-900/30 px-4 py-3">
                   <p className="whitespace-pre-wrap text-zinc-200">
                     {typeof lastUserMessage.content === "string"
                       ? lastUserMessage.content
@@ -256,7 +317,7 @@ export default function Dashboard() {
                 <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
                   Output
                 </h2>
-                <div className="rounded-lg border border-zinc-700 bg-zinc-900/50 px-4 py-3">
+                <div className="rounded-lg border border-[#1f1f24] bg-zinc-900/30 px-4 py-3">
                   <p className="whitespace-pre-wrap text-zinc-200">
                     {typeof lastAgentMessage.content === "string"
                       ? lastAgentMessage.content
@@ -271,7 +332,7 @@ export default function Dashboard() {
                 <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
                   Docker Test Results
                 </h2>
-                <div className="rounded-lg border border-zinc-700 bg-zinc-900/50 px-4 py-3 font-mono text-sm overflow-x-auto">
+                <div className="rounded-lg border border-[#1f1f24] bg-zinc-900/30 px-4 py-3 font-mono text-sm overflow-x-auto">
                   <pre className="whitespace-pre-wrap text-zinc-300">
                     {JSON.stringify(evalResult, null, 2)}
                   </pre>
@@ -281,15 +342,17 @@ export default function Dashboard() {
           </div>
 
           {/* Chat / Command Input */}
-          <div className="border-t border-zinc-800 p-4">
+          <div className="border-t border-[#1f1f24] p-4">
             <form onSubmit={handleSubmit} className="flex gap-3">
               <input
                 type="text"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Describe what you want Exegol to build..."
-                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 rounded-lg border border-[#1f1f24] bg-zinc-900/50 px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500"
                 disabled={
+                  backendUnreachable ||
+                  (health && !health.ollama.ok) ||
                   isSubmitting ||
                   status?.status === "running" ||
                   status?.status === "awaiting_approval"
@@ -298,12 +361,14 @@ export default function Dashboard() {
               <button
                 type="submit"
                 disabled={
+                  backendUnreachable ||
+                  (health && !health.ollama.ok) ||
                   !prompt.trim() ||
                   isSubmitting ||
                   status?.status === "running" ||
                   status?.status === "awaiting_approval"
                 }
-                className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="rounded-lg bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-[0_0_12px_rgba(220,38,38,0.3)]"
               >
                 Run
               </button>
@@ -312,8 +377,8 @@ export default function Dashboard() {
         </main>
 
         {/* Plan Viewer side panel */}
-        <aside className="w-96 flex-shrink-0 flex flex-col border-l border-zinc-800">
-          <div className="border-b border-zinc-800 px-4 py-3">
+        <aside className="w-96 flex-shrink-0 flex flex-col border-l border-[#1f1f24] bg-black/20">
+          <div className="border-b border-[#1f1f24] px-4 py-3">
             <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider">
               Plan (workspace/plan.md)
             </h2>
@@ -321,7 +386,7 @@ export default function Dashboard() {
           <div className="flex-1 overflow-auto p-4">
             <div className="prose prose-invert prose-sm max-w-none">
               {plan ? (
-                <pre className="whitespace-pre-wrap text-zinc-300 font-mono text-xs bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
+                <pre className="whitespace-pre-wrap text-zinc-300 font-mono text-xs bg-zinc-900/30 rounded-lg p-4 border border-[#1f1f24]">
                   {plan}
                 </pre>
               ) : (
