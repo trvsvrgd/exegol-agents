@@ -1,11 +1,11 @@
 """Approval node: Human-in-the-loop interrupt before Coder/Executor runs."""
 
-from langgraph.types import Command, interrupt
+from langgraph.types import Command, interrupt, RunnableConfig
 
 from app.state import GraphState
 
 
-def approval_node(state: GraphState) -> Command:
+def approval_node(state: GraphState, config: RunnableConfig | None = None) -> Command:
     """
     Pause execution and wait for human approval before the Coder runs.
     Resume value should be {"decision": "approve"|"edit"|"reject", "edited_plan": "..." (if edit)}.

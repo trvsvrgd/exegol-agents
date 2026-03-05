@@ -1,5 +1,6 @@
 """LangGraph workflow with Human-in-the-Loop approval before Coder."""
 
+import time
 import uuid
 from pathlib import Path
 
@@ -10,6 +11,11 @@ from langgraph.types import Command
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+from app.logging_config import (
+    LOG_TOKEN_USAGE_KEY,
+    log_node_end,
+    log_node_start,
+)
 from app.state import GraphState
 from app.nodes.planner_node import planner_node
 from app.nodes.approval_node import approval_node
@@ -19,6 +25,37 @@ from app.nodes.evaluator_node import evaluator_node
 
 # Module-level checkpointer for state persistence across invoke and resume
 _checkpointer = InMemorySaver()
+
+def _wrap_node(node_name: str, node_fn):
+    """Wrap a node to log start, end, duration, and token usage (if present)."""
+
+    def wrapped(state: GraphState, config=None):
+        cfg = config or {}
+        thread_id = cfg.get("configurable", {}).get("thread_id", "-")
+        log_node_start(node_name, thread_id)
+        t0 = time.perf_counter()
+        try:
+            result = node_fn(state, config) if _accepts_config(node_fn) else node_fn(state)
+        except Exception:
+            log_node_end(node_name, thread_id, time.perf_counter() - t0, None)
+            raise
+        token_usage = None
+        if isinstance(result, dict) and LOG_TOKEN_USAGE_KEY in result:
+            token_usage = result.pop(LOG_TOKEN_USAGE_KEY)
+            if not result:
+                result = {}
+        log_node_end(node_name, thread_id, time.perf_counter() - t0, token_usage)
+        return result
+
+    return wrapped
+
+
+def _accepts_config(fn) -> bool:
+    """Check if the node function accepts a config argument."""
+    import inspect
+    sig = inspect.signature(fn)
+    params = list(sig.parameters)
+    return len(params) >= 2
 
 
 def _route_after_evaluator(state: GraphState) -> str:
@@ -31,11 +68,11 @@ def _route_after_evaluator(state: GraphState) -> str:
 def _build_graph():
     """Build and compile the LangGraph workflow with HITL approval before Coder."""
     graph_builder = StateGraph(GraphState)
-    graph_builder.add_node("planner", planner_node)
-    graph_builder.add_node("approval", approval_node)
-    graph_builder.add_node("coder", coder_node)
-    graph_builder.add_node("rejected", rejected_node)
-    graph_builder.add_node("evaluator", evaluator_node)
+    graph_builder.add_node("planner", _wrap_node("planner", planner_node))
+    graph_builder.add_node("approval", _wrap_node("approval", approval_node))
+    graph_builder.add_node("coder", _wrap_node("coder", coder_node))
+    graph_builder.add_node("rejected", _wrap_node("rejected", rejected_node))
+    graph_builder.add_node("evaluator", _wrap_node("evaluator", evaluator_node))
 
     graph_builder.add_edge(START, "planner")
     graph_builder.add_edge("planner", "approval")

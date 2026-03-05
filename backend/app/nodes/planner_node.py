@@ -3,6 +3,9 @@ from pathlib import Path
 
 import yaml
 from langchain_community.chat_models import ChatOllama
+from langgraph.types import RunnableConfig
+
+from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
@@ -40,7 +43,7 @@ def _load_planner_config() -> dict:
         return {"model": "qwen2.5-coder", "base_url": "http://localhost:11434"}
 
 
-def planner_node(state: GraphState) -> dict:
+def planner_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
     """Reads user message and plan.md, outputs a structured task for the coder via local Ollama."""
     config = _load_planner_config()
     llm = ChatOllama(
@@ -85,6 +88,7 @@ Output the task plan as JSON:"""
     ]
 
     raw = ""
+    response = None
     try:
         response = llm.invoke(messages)
         raw = response.content if hasattr(response, "content") else str(response)
@@ -104,8 +108,12 @@ Output the task plan as JSON:"""
         task = raw.strip() if raw.strip() else f"Execute user request: {user_text[:200]}"
         planner_content = f"{task}\n\n[Parse fallback: {e}]"
 
-    return {
+    out: dict = {
         "messages": state["messages"] + [{"role": "planner", "content": planner_content}],
         "current_plan": task,
         "status": "planned",
     }
+    usage = extract_usage_from_response(response)
+    if usage is not None:
+        out[LOG_TOKEN_USAGE_KEY] = usage
+    return out

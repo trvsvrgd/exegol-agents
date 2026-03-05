@@ -4,6 +4,9 @@ from pathlib import Path
 
 import yaml
 from langchain_community.chat_models import ChatOllama
+from langgraph.types import RunnableConfig
+
+from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
@@ -55,7 +58,7 @@ def _get_coder_output(state: GraphState) -> str:
     return ""
 
 
-def evaluator_node(state: GraphState) -> dict:
+def evaluator_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
     """
     Review Coder output against the original user prompt and approved plan using local Ollama.
     Returns structured evaluation with success flag and feedback string.
@@ -98,6 +101,7 @@ Evaluate and output JSON:"""
     ]
 
     raw = ""
+    response = None
     try:
         response = llm.invoke(messages)
         raw = response.content if hasattr(response, "content") else str(response)
@@ -123,4 +127,7 @@ Evaluate and output JSON:"""
     if not evaluation.success:
         update["evaluator_feedback"] = evaluation.feedback
 
+    usage = extract_usage_from_response(response)
+    if usage is not None:
+        update[LOG_TOKEN_USAGE_KEY] = usage
     return update
