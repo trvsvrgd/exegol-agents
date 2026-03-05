@@ -1,5 +1,8 @@
+import ast
+import re
 import threading
 import uuid
+from collections import deque
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -8,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.graph import build_and_stream_graph, stream_resume_graph
+from app.logging_config import LOG_PATH
 
 # Load .env from backend/ so LangSmith and other vars work
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -143,6 +147,68 @@ async def get_plan():
         return {"content": ""}
     except OSError as e:
         return {"content": "", "error": str(e)}
+
+
+# Log line format: timestamp | level | thread_id=XXX | message
+# message can be: "node=NAME event=start" or "node=NAME event=end duration_sec=X.XXX token_usage={...}"
+_LOG_LINE_RE = re.compile(
+    r"^(.+?)\s*\|\s*(\w+)\s*\|\s*thread_id=([^\s|]+)\s*\|\s*(.*)$"
+)
+_NODE_EVENT_RE = re.compile(r"node=(\S+)\s+event=(\w+)(?:\s+duration_sec=([\d.]+))?(?:\s+token_usage=(.+))?$")
+_TOKEN_USAGE_RE = re.compile(r"^\{.+\}$")
+
+
+def _parse_log_line(line: str) -> dict | None:
+    """Parse a single exegol.log line into a structured dict, or None if unparseable."""
+    line = line.strip()
+    if not line:
+        return None
+    m = _LOG_LINE_RE.match(line)
+    if not m:
+        return {"raw": line}
+    ts, level, thread_id, msg = m.groups()
+    entry: dict = {
+        "timestamp": ts.strip(),
+        "level": level,
+        "thread_id": thread_id.strip(),
+        "message": msg.strip(),
+    }
+    # Parse node/event/duration/token_usage from message
+    ne = _NODE_EVENT_RE.match(msg.strip())
+    if ne:
+        entry["node"] = ne.group(1)
+        entry["event"] = ne.group(2)
+        if ne.group(3):
+            try:
+                entry["duration_sec"] = float(ne.group(3))
+            except (TypeError, ValueError):
+                pass
+        tu_str = ne.group(4)
+        if tu_str and _TOKEN_USAGE_RE.search(tu_str):
+            try:
+                entry["token_usage"] = ast.literal_eval(tu_str)
+            except (ValueError, SyntaxError):
+                pass
+    return entry
+
+
+@app.get("/api/telemetry")
+async def get_telemetry():
+    """Return the last 100 lines of exegol.log parsed into a JSON array for token usage and latency metrics."""
+    try:
+        with open(LOG_PATH, encoding="utf-8") as f:
+            lines = deque(f, maxlen=100)
+    except FileNotFoundError:
+        return {"entries": []}
+    except OSError as e:
+        return {"entries": [], "error": str(e)}
+
+    entries = []
+    for line in lines:
+        parsed = _parse_log_line(line)
+        if parsed:
+            entries.append(parsed)
+    return {"entries": entries}
 
 
 @app.post("/api/run")
