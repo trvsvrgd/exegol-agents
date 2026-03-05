@@ -3,6 +3,7 @@
 ## Prerequisites
 - Python 3.10+
 - Node.js 18+ (for frontend)
+- Docker (required for Coder sandbox)
 - Ollama with `qwen2.5-coder` for planner and coder (required for `/api/run`)
 
 ## 1. Backend Environment
@@ -34,6 +35,17 @@ App: `http://localhost:3000`
 - Install: https://ollama.ai
 - Pull model: `ollama pull qwen2.5-coder`
 - Planner and coder both use this model (configurable in `config/agents.yaml`)
+
+## 5. Sandbox Docker Image (Required for Coder)
+The Coder runs in an isolated container. Build the image:
+```powershell
+.\build_sandbox.ps1
+```
+Or manually:
+```bash
+docker build -f Dockerfile.sandbox -t exegol-sandbox-mcp:latest .
+```
+Config: `config/sandbox.json` (image name, workspace mount, network, timeouts)
 
 ## Verification
 - `curl http://localhost:8000/` → `{"message":"Hello from Exegol"}`

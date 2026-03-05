@@ -37,5 +37,5 @@
 
 - System Python is `python3`, not `python` — always use `python3` explicitly.
 - **Planner and coder use local Ollama** (`qwen2.5-coder` by default). Configure model in `config/agents.yaml`. No Gemini/cloud API keys needed.
-- **`POST /api/run` infinite loop without Docker**: the evaluator node always returns `exit_code: -1` when Docker is unavailable, and the conditional edge routes back to the planner indefinitely. To test individual nodes without Docker, invoke them directly (see earlier tests in this session).
+- **Sandbox MCP (Docker required)**: The Coder runs inside a containerized MCP server. Build the image first: `.\build_sandbox.ps1` or `docker build -f Dockerfile.sandbox -t exegol-sandbox-mcp:latest .`. Without it, the Run button is disabled and `/api/health` reports Docker/sandbox status.
 - **LangSmith tracing**: keep `LANGCHAIN_TRACING_V2=true` (the default in `.env.example`) when `LANGCHAIN_API_KEY` is set. Traces go to the `exegol-v2` project in LangSmith. If `LANGCHAIN_API_KEY` is empty/missing, set `LANGCHAIN_TRACING_V2=false` to suppress 401 auth errors in logs.

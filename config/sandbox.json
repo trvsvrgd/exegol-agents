@@ -1,0 +1,7 @@
+{
+  "image": "exegol-sandbox-mcp:latest",
+  "workspace_mount": "workspace",
+  "network": "none",
+  "container_timeout_sec": 600,
+  "extra_args": []
+}

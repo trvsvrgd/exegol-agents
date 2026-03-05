@@ -147,6 +147,40 @@ def _check_ollama() -> tuple[bool, str]:
         return False, str(e)
 
 
+def _check_docker() -> tuple[bool, str]:
+    """Check if Docker is running and the sandbox image exists. Returns (ok, message)."""
+    try:
+        import docker
+    except ImportError:
+        return False, "Docker SDK not installed. pip install docker"
+    try:
+        client = docker.from_env()
+        client.ping()
+    except docker.errors.DockerException as e:
+        return False, f"Docker not available: {e}. Start Docker Desktop or the Docker daemon."
+    except Exception as e:
+        return False, str(e)
+    # Check if sandbox image exists
+    import json
+    from pathlib import Path
+    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "sandbox.json"
+    image = "exegol-sandbox-mcp:latest"
+    if config_path.exists():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            image = cfg.get("image", image)
+        except (json.JSONDecodeError, OSError):
+            pass
+    try:
+        client.images.get(image)
+        return True, f"Docker ok, image {image} found"
+    except docker.errors.ImageNotFound:
+        return False, f"Sandbox image not found. Build it: docker build -f Dockerfile.sandbox -t {image} ."
+    except Exception as e:
+        return False, str(e)
+
+
 def _check_langsmith_config() -> tuple[bool, str | None]:
     """
     Check LangSmith config. Returns (ok, warning_message).
@@ -170,10 +204,12 @@ async def get_health():
     Used by the frontend to show clear error messages when components are missing.
     """
     ollama_ok, ollama_msg = await asyncio.to_thread(_check_ollama)
+    docker_ok, docker_msg = await asyncio.to_thread(_check_docker)
     langsmith_ok, langsmith_warning = _check_langsmith_config()
     return {
         "backend": "ok",
         "ollama": {"ok": ollama_ok, "message": ollama_msg},
+        "docker": {"ok": docker_ok, "message": docker_msg},
         "langsmith": {
             "ok": langsmith_ok,
             "warning": langsmith_warning,

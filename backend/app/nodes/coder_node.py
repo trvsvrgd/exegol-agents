@@ -8,7 +8,7 @@ from langgraph.types import RunnableConfig
 
 from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
 from app.state import GraphState
-from app.tools.mcp_client import get_filesystem_tools
+from app.tools.mcp_client import get_sandbox_mcp_tools
 
 
 def _get_task_and_context(state: GraphState) -> tuple[str, str]:
@@ -60,12 +60,16 @@ async def _run_coder_with_tools(state: GraphState) -> tuple[str, dict | None, li
     aggregated_usage: dict | None = None
     tool_entries: list[tuple[str, dict, str]] = []
 
-    async with get_filesystem_tools() as (session, tools):
+    async with get_sandbox_mcp_tools() as (session, tools):
         llm_with_tools = llm.bind_tools(tools)
 
-        system = """You are a coder with access to the local filesystem. You can read files, write files, and list directories.
-Execute the task you are given. Use the filesystem tools when you need to read or write code.
-After using tools, always summarize what you did: list files created or modified with their key contents (or snippets), so the evaluator can verify your work. Be concise."""
+        system = """You are a coder with access to an isolated sandbox (Docker). You have:
+- read_file, write_file, list_dir: work on the workspace (paths relative to workspace)
+- run_bash: run shell commands in the workspace (e.g. pip install, npm install, run scripts)
+- run_pytest: run pytest to verify code changes
+
+All operations are scoped to the project workspace. Execute the task you are given.
+After using tools, always summarize what you did: list files created or modified with key contents (or snippets), so the evaluator can verify your work. Be concise."""
 
         messages = [
             SystemMessage(content=system),

@@ -34,6 +34,7 @@ type PlanResponse = { content: string; error?: string };
 type HealthResponse = {
   backend: string;
   ollama: { ok: boolean; message: string };
+  docker: { ok: boolean; message: string };
   langsmith: { ok: boolean; warning: string | null };
   warnings: string[];
 };
@@ -242,6 +243,14 @@ export default function Dashboard() {
               </div>
             )}
 
+            {health && !health.docker?.ok && (
+              <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
+                <p className="font-medium text-amber-400">Docker / Sandbox image not ready</p>
+                <p className="mt-1 text-sm text-zinc-300">{health.docker?.message ?? "Docker or sandbox image missing"}</p>
+                <p className="mt-2 text-xs text-zinc-400">Build the sandbox: .\build_sandbox.ps1</p>
+              </div>
+            )}
+
             {health?.warnings && health.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
                 <p className="font-medium text-amber-400">Configuration warning</p>
@@ -353,6 +362,7 @@ export default function Dashboard() {
                 disabled={
                   backendUnreachable ||
                   (health && !health.ollama.ok) ||
+                  (health?.docker && !health.docker.ok) ||
                   isSubmitting ||
                   status?.status === "running" ||
                   status?.status === "awaiting_approval"
@@ -363,6 +373,7 @@ export default function Dashboard() {
                 disabled={
                   backendUnreachable ||
                   (health && !health.ollama.ok) ||
+                  (health?.docker && !health.docker.ok) ||
                   !prompt.trim() ||
                   isSubmitting ||
                   status?.status === "running" ||

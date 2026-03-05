@@ -1,9 +1,11 @@
 """
 MCP client that reads mcp_servers.json, starts MCP servers via stdio, and exposes
-tools as LangChain Tool objects.
+tools as LangChain Tool objects. Supports both host filesystem and sandboxed
+container MCP (Docker).
 """
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,8 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+logger = logging.getLogger(__name__)
 
 
 def _get_project_root() -> Path:
@@ -22,6 +26,59 @@ def _get_project_root() -> Path:
 def _get_config_path() -> Path:
     """Return the path to mcp_servers.json."""
     return _get_project_root() / "config" / "mcp_servers.json"
+
+
+def _get_sandbox_config_path() -> Path:
+    """Return the path to sandbox.json."""
+    return _get_project_root() / "config" / "sandbox.json"
+
+
+def _load_sandbox_config() -> dict[str, Any]:
+    """Load sandbox.json. Returns defaults if missing or invalid."""
+    defaults = {
+        "image": "exegol-sandbox-mcp:latest",
+        "workspace_mount": "workspace",
+        "network": "none",
+        "container_timeout_sec": 600,
+        "extra_args": [],
+    }
+    path = _get_sandbox_config_path()
+    if not path.exists():
+        return defaults
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+        for k, v in defaults.items():
+            if k not in loaded:
+                loaded[k] = v
+        return loaded
+    except (json.JSONDecodeError, OSError):
+        return defaults
+
+
+def _build_sandbox_server_params() -> StdioServerParameters:
+    """Build StdioServerParameters for the containerized Sandbox MCP server."""
+    config = _load_sandbox_config()
+    workspace = _resolve_path_from_project(config["workspace_mount"])
+    if not workspace.exists():
+        raise FileNotFoundError(f"Workspace directory does not exist: {workspace}")
+
+    args = [
+        "run",
+        "-i",
+        "--rm",
+        "-v", f"{workspace.resolve()}:/workspace",
+    ]
+    if config.get("network") == "none":
+        args.append("--network=none")
+    args.extend(config.get("extra_args", []))
+    args.append(config["image"])
+
+    return StdioServerParameters(
+        command="docker",
+        args=args,
+        env=None,
+    )
 
 
 def _resolve_path_from_project(path_arg: str) -> Path:
@@ -97,6 +154,26 @@ async def get_filesystem_tools():
         raise ValueError("MCP server 'filesystem' not found in config")
 
     params = _build_server_params(config["filesystem"])
+    stdio_ctx = stdio_client(params)
+
+    async with stdio_ctx as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            list_result = await session.list_tools()
+            tools = _create_langchain_tools(session, list_result.tools)
+            yield session, tools
+
+
+@asynccontextmanager
+async def get_sandbox_mcp_tools():
+    """
+    Async context manager that spawns a persistent Docker container hosting the
+    Sandbox MCP server and yields (session, tools). One container per run.
+    All Coder operations (filesystem, bash, pytest) go through this sandbox.
+    Container is torn down when the context exits.
+    """
+    params = _build_sandbox_server_params()
+    logger.info("Starting sandbox container MCP (one container per run)")
     stdio_ctx = stdio_client(params)
 
     async with stdio_ctx as (read_stream, write_stream):
