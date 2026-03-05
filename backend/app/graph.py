@@ -22,10 +22,10 @@ _checkpointer = InMemorySaver()
 
 
 def _route_after_evaluator(state: GraphState) -> str:
-    """Route to END if tests passed, else back to planner to fix."""
+    """Route to END if evaluation passed, else back to Coder with feedback for retry."""
     result = state.get("evaluation_result") or {}
-    exit_code = result.get("exit_code", -1)
-    return "end" if exit_code == 0 else "planner"
+    success = result.get("success", False)
+    return "end" if success else "coder"
 
 
 def _build_graph():
@@ -45,7 +45,7 @@ def _build_graph():
     graph_builder.add_conditional_edges(
         "evaluator",
         _route_after_evaluator,
-        {"end": END, "planner": "planner"},
+        {"end": END, "coder": "coder"},
     )
     return graph_builder.compile(checkpointer=_checkpointer)
 

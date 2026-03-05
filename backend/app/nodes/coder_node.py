@@ -10,8 +10,11 @@ from app.tools.mcp_client import get_filesystem_tools
 
 
 def _get_task_and_context(state: GraphState) -> tuple[str, str]:
-    """Extract task and user context from state."""
+    """Extract task and user context from state. Includes evaluator feedback for retries."""
     task = state.get("current_plan", "No task")
+    evaluator_feedback = state.get("evaluator_feedback", "")
+    if evaluator_feedback:
+        task = f"{task}\n\n[Evaluator feedback - address this]: {evaluator_feedback}"
     messages = state.get("messages", [])
     user_text = ""
     if messages:
