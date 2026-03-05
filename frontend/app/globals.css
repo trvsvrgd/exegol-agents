@@ -1,8 +1,18 @@
 @import "tailwindcss";
 
+/* Exegol - Sith / Star Wars inspired theme: dark, lightning accents, crimson power */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #050508;
+  --foreground: #e8e6e3;
+  --muted: #6b7280;
+  --border: #1f1f24;
+  --accent: #dc2626;
+  --accent-light: #ef4444;
+  --lightning: #a78bfa;
+  --lightning-dim: #7c3aed;
+  --sith-amber: #d97706;
+  --success: #059669;
+  --error: #dc2626;
 }
 
 @theme inline {
@@ -12,15 +22,12 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
 }

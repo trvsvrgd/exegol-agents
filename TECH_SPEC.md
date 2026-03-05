@@ -2,8 +2,8 @@
 
 ## High-Level Intent
 - Autonomous local agent orchestrator using FastAPI, LangGraph, and Next.js.
-- Planner (Gemini) decomposes user intent into tasks; Coder (Ollama/qwen2.5-coder) executes them.
-- Local-first: Ollama for coding, optional cloud LLMs for planning.
+- Planner (Ollama/qwen2.5-coder) decomposes user intent into tasks; Coder (Ollama/qwen2.5-coder) executes them.
+- Local-first: Ollama for both planning and coding.
 
 ## Core Requirements
 - **Backend**: FastAPI, LangGraph StateGraph, CORS for `http://localhost:3000`.
@@ -13,8 +13,8 @@
 - **Tracing**: LangSmith when `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY` set.
 
 ## Tech Stack
-- **Backend**: Python 3.x, FastAPI, uvicorn, LangGraph, langchain-google-genai, langchain-community.
-- **LLMs**: ChatGoogleGenerativeAI (Gemini 2.0 Flash), ChatOllama (qwen2.5-coder @ localhost:11434).
+- **Backend**: Python 3.x, FastAPI, uvicorn, LangGraph, langchain-community.
+- **LLMs**: ChatOllama (qwen2.5-coder @ localhost:11434) for planner and coder.
 - **Frontend**: Next.js (App Router, Tailwind CSS).
 - **Config**: `config/agents.yaml`, `config/mcp_servers.json`, `workspace/plan.md`.
 
@@ -22,7 +22,7 @@
 - `app/main.py`: FastAPI app, CORS, POST `/api/run`.
 - `app/graph.py`: StateGraph definition, `run_graph(prompt)`.
 - `app/state.py`: `GraphState` TypedDict.
-- `app/nodes/planner_node.py`: Reads `workspace/plan.md`, outputs task via Gemini.
+- `app/nodes/planner_node.py`: Reads `workspace/plan.md`, outputs structured task via local Ollama (PydanticOutputParser).
 - `app/nodes/coder_node.py`: Executes task (mock or Ollama).
 
 ## Testing Standards

@@ -26,6 +26,9 @@ build/
 *.swp
 *.swo
 
+# Logs
+exegol.log
+
 # OS
 .DS_Store
 Thumbs.db

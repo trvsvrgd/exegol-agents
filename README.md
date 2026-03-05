@@ -1,13 +1,13 @@
 # Exegol V2
 
-Autonomous local agent orchestrator built with FastAPI, LangGraph, and Next.js. A planner (Gemini) decomposes user intent into tasks; a coder (Ollama) executes them locally.
+Autonomous local agent orchestrator built with FastAPI, LangGraph, and Next.js. A planner (Ollama) decomposes user intent into tasks; a coder (Ollama) executes them locally.
 
 ## Tech Stack
 
 | Layer | Stack |
 |-------|-------|
 | Backend | Python, FastAPI, LangGraph, LangChain |
-| LLMs | Gemini 2.0 Flash (planning), Ollama/qwen2.5-coder (coding) |
+| LLMs | Ollama/qwen2.5-coder (planning and coding) |
 | Frontend | Next.js (App Router), Tailwind CSS |
 
 ## Quick Start
@@ -16,13 +16,13 @@ Autonomous local agent orchestrator built with FastAPI, LangGraph, and Next.js. 
 
 - Python 3.10+
 - Node.js 18+
-- (Optional) [Ollama](https://ollama.ai) with `qwen2.5-coder` for real coder execution
+- [Ollama](https://ollama.ai) with `qwen2.5-coder` for planner and coder (pull: `ollama pull qwen2.5-coder`)
 
 ### Backend
 
 ```bash
 cd backend
-cp .env.example .env   # Add GOOGLE_API_KEY, etc.
+cp .env.example .env   # Optional: LANGCHAIN_API_KEY for tracing
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
@@ -72,11 +72,11 @@ curl -X POST http://localhost:8000/api/run \
 ## Flow
 
 ```
-START → Planner (Gemini) → Coder (Ollama) → END
+START → Planner (Ollama) → Coder (Ollama) → END
 ```
 
-- **Planner**: Reads `workspace/plan.md`, uses Gemini to decompose prompts into tasks.
-- **Coder**: Executes tasks via Ollama (or mock when Ollama is not configured).
+- **Planner**: Reads `workspace/plan.md`, uses local Ollama with structured output to decompose prompts into tasks.
+- **Coder**: Executes tasks via Ollama with MCP filesystem tools.
 
 ## Configuration
 
