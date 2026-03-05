@@ -1,14 +1,24 @@
+"""LangGraph workflow with Human-in-the-Loop approval before Coder."""
+
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, END, START
+from langgraph.types import Command
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from app.state import GraphState
 from app.nodes.planner_node import planner_node
+from app.nodes.approval_node import approval_node
 from app.nodes.coder_node import coder_node
+from app.nodes.rejected_node import rejected_node
 from app.nodes.evaluator_node import evaluator_node
+
+# Module-level checkpointer for state persistence across invoke and resume
+_checkpointer = InMemorySaver()
 
 
 def _route_after_evaluator(state: GraphState) -> str:
@@ -19,50 +29,146 @@ def _route_after_evaluator(state: GraphState) -> str:
 
 
 def _build_graph():
-    """Build and compile the LangGraph workflow."""
+    """Build and compile the LangGraph workflow with HITL approval before Coder."""
     graph_builder = StateGraph(GraphState)
     graph_builder.add_node("planner", planner_node)
+    graph_builder.add_node("approval", approval_node)
     graph_builder.add_node("coder", coder_node)
+    graph_builder.add_node("rejected", rejected_node)
     graph_builder.add_node("evaluator", evaluator_node)
+
     graph_builder.add_edge(START, "planner")
-    graph_builder.add_edge("planner", "coder")
+    graph_builder.add_edge("planner", "approval")
+    # approval -> coder or approval -> rejected via Command(goto=...) in approval_node
+    graph_builder.add_edge("rejected", END)
     graph_builder.add_edge("coder", "evaluator")
     graph_builder.add_conditional_edges(
         "evaluator",
         _route_after_evaluator,
         {"end": END, "planner": "planner"},
     )
-    return graph_builder.compile()
+    return graph_builder.compile(checkpointer=_checkpointer)
 
 
-def build_and_stream_graph(prompt: str):
-    """Yield (node_name, state) as the graph runs for status polling."""
+def build_and_stream_graph(prompt: str, thread_id: str | None = None):
+    """
+    Yield (node_name, state) as the graph runs.
+    When interrupt hits, yields ("__interrupt__", {state, interrupt_info}) and stops.
+    """
+    thread_id = thread_id or str(uuid.uuid4())
     graph = _build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
     initial_state: GraphState = {
         "messages": [{"role": "user", "content": prompt}],
         "current_plan": "",
         "status": "started",
     }
-    # Merge state as we stream updates
     merged: dict = dict(initial_state)
-    for chunk in graph.stream(initial_state, stream_mode="updates"):
+
+    for chunk in graph.stream(initial_state, config=config, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            interrupt_data = chunk["__interrupt__"]
+            yield "__interrupt__", {
+                "merged": merged,
+                "interrupt": [
+                    {"value": getattr(i, "value", i), "id": getattr(i, "id", None)}
+                    for i in (interrupt_data if isinstance(interrupt_data, (list, tuple)) else [interrupt_data])
+                ],
+                "thread_id": thread_id,
+            }
+            return
+
         for node_name, update in chunk.items():
             merged.update(update)
             yield node_name, merged
 
 
-def run_graph(prompt: str) -> dict:
-    """Build and run the LangGraph workflow: START -> Planner -> Coder -> Evaluator -> [END | Planner]."""
+def run_graph(prompt: str, thread_id: str | None = None) -> dict:
+    """Run the graph: START -> Planner -> Approval (interrupt) -> Coder -> Evaluator -> [END | Planner]."""
+    thread_id = thread_id or str(uuid.uuid4())
     graph = _build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
     initial_state: GraphState = {
         "messages": [{"role": "user", "content": prompt}],
         "current_plan": "",
         "status": "started",
     }
-    result = graph.invoke(initial_state)
+    result = graph.invoke(initial_state, config=config)
     return {
         "messages": result["messages"],
         "current_plan": result["current_plan"],
         "status": result["status"],
         "evaluation_result": result.get("evaluation_result"),
     }
+
+
+def resume_graph(
+    thread_id: str,
+    decision: str,
+    edited_plan: str | None = None,
+) -> dict | None:
+    """
+    Resume the graph after human approval.
+    Returns result dict, or None if thread_id not found / graph not interrupted.
+    """
+    graph = _build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    resume_value = {"decision": decision}
+    if decision == "edit" and edited_plan:
+        resume_value["edited_plan"] = edited_plan
+
+    result = graph.invoke(Command(resume=resume_value), config=config)
+
+    if "__interrupt__" in result:
+        return {
+            "status": "awaiting_approval",
+            "__interrupt__": result["__interrupt__"],
+            "messages": result.get("messages", []),
+            "current_plan": result.get("current_plan", ""),
+            "evaluation_result": result.get("evaluation_result"),
+        }
+
+    return {
+        "messages": result["messages"],
+        "current_plan": result["current_plan"],
+        "status": result["status"],
+        "evaluation_result": result.get("evaluation_result"),
+    }
+
+
+def stream_resume_graph(thread_id: str, decision: str, edited_plan: str | None = None):
+    """
+    Resume the graph and stream updates.
+    Yields (node_name, state) like build_and_stream_graph.
+    On another interrupt, yields ("__interrupt__", {...}).
+    """
+    graph = _build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    resume_value = {"decision": decision}
+    if decision == "edit" and edited_plan:
+        resume_value["edited_plan"] = edited_plan
+
+    # Start with current checkpoint state
+    try:
+        snapshot = graph.get_state(config)
+        merged = dict(snapshot.values) if snapshot.values else {}
+    except Exception:
+        merged = {}
+    for chunk in graph.stream(
+        Command(resume=resume_value), config=config, stream_mode="updates"
+    ):
+        if "__interrupt__" in chunk:
+            interrupt_data = chunk["__interrupt__"]
+            yield "__interrupt__", {
+                "merged": merged,
+                "interrupt": [
+                    {"value": getattr(i, "value", i), "id": getattr(i, "id", None)}
+                    for i in (interrupt_data if isinstance(interrupt_data, (list, tuple)) else [interrupt_data])
+                ],
+                "thread_id": thread_id,
+            }
+            return
+
+        for node_name, update in chunk.items():
+            merged.update(update)
+            yield node_name, merged

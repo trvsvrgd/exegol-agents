@@ -1,4 +1,5 @@
 import threading
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,7 +7,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.graph import build_and_stream_graph
+from app.graph import build_and_stream_graph, stream_resume_graph
 
 # Load .env from backend/ so LangSmith and other vars work
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -36,7 +37,23 @@ class RunRequest(BaseModel):
     prompt: str
 
 
-def _run_graph_background(prompt: str) -> None:
+class DecisionRequest(BaseModel):
+    thread_id: str
+    decision: str  # "approve" | "edit" | "reject"
+    edited_plan: str | None = None
+
+
+def _apply_state_update(update: dict) -> None:
+    """Apply a state update to _execution_state (caller holds _state_lock)."""
+    if "messages" in update and update["messages"]:
+        _execution_state["messages"] = update["messages"]
+    if "current_plan" in update and update.get("current_plan") is not None:
+        _execution_state["current_plan"] = update["current_plan"]
+    if "evaluation_result" in update and update.get("evaluation_result") is not None:
+        _execution_state["evaluation_result"] = update["evaluation_result"]
+
+
+def _run_graph_background(prompt: str, thread_id: str) -> None:
     """Run graph in thread and update _execution_state for polling."""
     with _state_lock:
         _execution_state["status"] = "running"
@@ -44,17 +61,57 @@ def _run_graph_background(prompt: str) -> None:
         _execution_state["messages"] = [{"role": "user", "content": prompt}]
         _execution_state["current_plan"] = ""
         _execution_state["evaluation_result"] = None
+        _execution_state["thread_id"] = thread_id
+        _execution_state.pop("__interrupt__", None)
 
     try:
-        for node_name, state in build_and_stream_graph(prompt):
+        for node_name, state in build_and_stream_graph(prompt, thread_id=thread_id):
+            if node_name == "__interrupt__":
+                with _state_lock:
+                    _execution_state["status"] = "awaiting_approval"
+                    _execution_state["current_node"] = "approval"
+                    if isinstance(state, dict) and "merged" in state:
+                        _apply_state_update(state["merged"])
+                    _execution_state["__interrupt__"] = state.get("interrupt", state)
+                    _execution_state["thread_id"] = state.get("thread_id", thread_id)
+                return
+
             with _state_lock:
                 _execution_state["current_node"] = node_name
-                if "messages" in state and state["messages"]:
-                    _execution_state["messages"] = state["messages"]
-                if "current_plan" in state and state["current_plan"]:
-                    _execution_state["current_plan"] = state["current_plan"]
-                if "evaluation_result" in state and state["evaluation_result"]:
-                    _execution_state["evaluation_result"] = state["evaluation_result"]
+                _apply_state_update(state if isinstance(state, dict) else {})
+
+        with _state_lock:
+            _execution_state["status"] = "done"
+    except Exception as e:
+        with _state_lock:
+            _execution_state["status"] = "error"
+            _execution_state["error"] = str(e)
+
+
+def _run_resume_background(thread_id: str, decision: str, edited_plan: str | None) -> None:
+    """Resume graph after human decision and update _execution_state."""
+    with _state_lock:
+        _execution_state["status"] = "running"
+        _execution_state["current_node"] = "approval"
+        _execution_state["thread_id"] = thread_id
+
+    try:
+        for node_name, state in stream_resume_graph(
+            thread_id, decision=decision, edited_plan=edited_plan
+        ):
+            if node_name == "__interrupt__":
+                with _state_lock:
+                    _execution_state["status"] = "awaiting_approval"
+                    if isinstance(state, dict) and "merged" in state:
+                        _apply_state_update(state["merged"])
+                    _execution_state["__interrupt__"] = state.get("interrupt", state)
+                    _execution_state["thread_id"] = state.get("thread_id", thread_id)
+                return
+
+            with _state_lock:
+                _execution_state["current_node"] = node_name
+                _apply_state_update(state if isinstance(state, dict) else {})
+
         with _state_lock:
             _execution_state["status"] = "done"
     except Exception as e:
@@ -90,5 +147,39 @@ async def get_plan():
 
 @app.post("/api/run")
 async def run(request: RunRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(_run_graph_background, request.prompt)
-    return {"status": "started", "message": "Execution started. Poll /api/status for progress."}
+    thread_id = str(uuid.uuid4())
+    background_tasks.add_task(_run_graph_background, request.prompt, thread_id)
+    return {
+        "status": "started",
+        "thread_id": thread_id,
+        "message": "Execution started. Poll /api/status for progress. When status is awaiting_approval, submit decision via POST /api/decision.",
+    }
+
+
+@app.post("/api/decision")
+async def submit_decision(request: DecisionRequest, background_tasks: BackgroundTasks):
+    """Submit approve, edit, or reject decision to resume the graph after HITL interrupt."""
+    decision = request.decision.lower()
+    if decision not in ("approve", "edit", "reject"):
+        return {
+            "status": "error",
+            "message": "decision must be one of: approve, edit, reject",
+        }
+
+    if decision == "edit" and not request.edited_plan:
+        return {
+            "status": "error",
+            "message": "edited_plan is required when decision is 'edit'",
+        }
+
+    background_tasks.add_task(
+        _run_resume_background,
+        request.thread_id,
+        decision,
+        request.edited_plan,
+    )
+    return {
+        "status": "resumed",
+        "thread_id": request.thread_id,
+        "message": f"Decision '{decision}' submitted. Poll /api/status for progress.",
+    }

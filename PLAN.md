@@ -1,5 +1,7 @@
 # Exegol V2 Evolution Roadmap (Updated)
 
+*Internal development plan for the Exegol platform itself—not the user's workspace plan. User plans for agents and apps live in `workspace/plan.md` and are surfaced via the UI.*
+
 ## Phase 1: Local-First Orchestration & State (The App)
 - [x] **Task 1.1: Local Planner Migration.** Swapped the Planner node's LLM from Gemini to local Ollama (qwen2.5-coder). Added PydanticOutputParser and `format="json"` for reliable structured JSON task output. Config: `config/agents.yaml`.
 - [ ] **Task 1.2: Graph Observability & Telemetry.** Integrate LangSmith (or a local telemetry equivalent) to track the LangGraph execution path, latency, and token usage. We need a baseline to measure future drift.
@@ -8,7 +10,7 @@
 ## Phase 2: Orchestrator Maturation (The Coordinator)
 - [ ] **Task 2.1: Dynamic Routing.** Upgrade the Planner to a dynamic Router. Give the local model the ability to assess user intent and route tasks to specialized sub-agents rather than a linear pipeline.
 - [ ] **Task 2.2: Memory & Context.** Implement a local vector store (e.g., Chroma) so the Coordinator can retrieve past architectural decisions and standard operating procedures (SOPs).
-- [ ] **Task 2.3: Human-in-the-Loop (HITL) Checkpoints.** Implement LangGraph's `interrupt` capability before any high-stakes execution node. The graph must pause, persist its state, and wait for human approval via the Next.js UI before proceeding.
+- [x] **Task 2.3: Human-in-the-Loop (HITL) Checkpoints.** Implement LangGraph's `interrupt` capability before any high-stakes execution node. The graph pauses, persists its state with InMemorySaver, and waits for human approval via `POST /api/decision` (approve/edit/reject) before the Coder runs.
 
 ## Phase 3: The "Agent Manager" Lifecycle (Evaluation & Drift)
 - [ ] **Task 3.1: Session-Level Evaluation (The Evaluator Node).** Build an internal Evaluator node that runs after the Coder. It must grade the execution against the original prompt using a strict rubric (Task Success, Tool Error Rate). If it fails, it routes back to the Coder.
