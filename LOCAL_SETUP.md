@@ -3,12 +3,11 @@
 ## Prerequisites
 - Python 3.10+
 - Node.js 18+ (for frontend)
-- (Optional) Ollama with `qwen2.5-coder` for real coder execution
+- Ollama with `qwen2.5-coder` for planner and coder (required for `/api/run`)
 
 ## 1. Backend Environment
 1. Copy `backend/.env.example` to `backend/.env` and fill placeholders.
 2. Set:
-   - `GOOGLE_API_KEY` — Gemini API key (Google AI Studio)
    - `LANGCHAIN_API_KEY` — LangSmith (optional, for tracing)
    - `LANGCHAIN_TRACING_V2=true` — enable tracing
    - `LANGCHAIN_PROJECT=exegol-v2`
@@ -31,10 +30,10 @@ npm run dev
 ```
 App: `http://localhost:3000`
 
-## 4. Ollama (Optional)
+## 4. Ollama (Required)
 - Install: https://ollama.ai
 - Pull model: `ollama pull qwen2.5-coder`
-- Uncomment Ollama invocation in `backend/app/nodes/coder_node.py`
+- Planner and coder both use this model (configurable in `config/agents.yaml`)
 
 ## Verification
 - `curl http://localhost:8000/` → `{"message":"Hello from Exegol"}`

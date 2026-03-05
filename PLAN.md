@@ -1,23 +1,23 @@
-# Exegol V2 Execution Plan
+# Exegol V2 Evolution Roadmap (Updated)
 
-## Phase 1: Core Orchestration (Complete)
-- [x] FastAPI app with CORS, POST `/api/run`
-- [x] LangGraph StateGraph: messages, current_plan, status
-- [x] `planner_node`: ChatGoogleGenerativeAI, reads `workspace/plan.md`
-- [x] `coder_node`: ChatOllama (configured, mock for now)
-- [x] Flow: START → Planner → Coder → END
-- [x] python-dotenv for `.env` loading
-- [x] VOS files: TECH_SPEC.md, PLAN.md, .cursorrules, LOCAL_SETUP.md
+## Phase 1: Local-First Orchestration & State (The App)
+- [x] **Task 1.1: Local Planner Migration.** Swapped the Planner node's LLM from Gemini to local Ollama (qwen2.5-coder). Added PydanticOutputParser and `format="json"` for reliable structured JSON task output. Config: `config/agents.yaml`.
+- [ ] **Task 1.2: Graph Observability & Telemetry.** Integrate LangSmith (or a local telemetry equivalent) to track the LangGraph execution path, latency, and token usage. We need a baseline to measure future drift.
+- [ ] **Task 1.3: Streaming State to UI.** Update the FastAPI backend to stream LangGraph state changes to the Next.js frontend via Server-Sent Events, providing real-time visibility into the local models' execution.
 
-## Phase 2: Next Steps (Placeholder)
-- [ ] Frontend UI for prompts and results
-- [ ] Real Ollama integration (uncomment in coder_node)
-- [ ] pytest suite for graph and API
-- [ ] MCP tool integration
+## Phase 2: Orchestrator Maturation (The Coordinator)
+- [ ] **Task 2.1: Dynamic Routing.** Upgrade the Planner to a dynamic Router. Give the local model the ability to assess user intent and route tasks to specialized sub-agents rather than a linear pipeline.
+- [ ] **Task 2.2: Memory & Context.** Implement a local vector store (e.g., Chroma) so the Coordinator can retrieve past architectural decisions and standard operating procedures (SOPs).
+- [ ] **Task 2.3: Human-in-the-Loop (HITL) Checkpoints.** Implement LangGraph's `interrupt` capability before any high-stakes execution node. The graph must pause, persist its state, and wait for human approval via the Next.js UI before proceeding.
+
+## Phase 3: The "Agent Manager" Lifecycle (Evaluation & Drift)
+- [ ] **Task 3.1: Session-Level Evaluation (The Evaluator Node).** Build an internal Evaluator node that runs after the Coder. It must grade the execution against the original prompt using a strict rubric (Task Success, Tool Error Rate). If it fails, it routes back to the Coder.
+- [ ] **Task 3.2: Long-Term Drift Detection (The Manager Dashboard).** Create a dashboard in the Next.js UI that tracks "Behavioral Drift." Monitor metrics over time: frequency of redundant tool usage, latency degradation, and reasoning coherence across sessions.
+- [ ] **Task 3.3: The "Coaching" Mechanism.** Implement a feedback loop where the Agent Manager (you) can flag a drifted response in the UI, provide a text correction, and write that correction to the agent's long-term vector memory as a new SOP ("Standard Operating Procedure").
 
 ## Verification Evidence
 - FastAPI app loads: `python -c "from app.main import app; print('OK')"` → OK
-- Graph runs (Gemini quota-dependent): `run_graph("...")` invokes planner → coder
+- Graph runs (Ollama): `run_graph("...")` invokes planner → coder
 
 ## Active Exceptions
 - None

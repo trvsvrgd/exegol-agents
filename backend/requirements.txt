@@ -1,8 +1,8 @@
 fastapi
 uvicorn
 python-dotenv
+pyyaml
 langgraph
-langchain-google-genai
 langchain-community
 langchain-core
 docker

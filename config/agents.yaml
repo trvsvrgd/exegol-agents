@@ -1,0 +1,5 @@
+# Agent model configuration (planner, coder, etc.)
+# Planner uses local Ollama - no Gemini/cloud API needed
+planner:
+  model: qwen2.5-coder
+  base_url: http://localhost:11434
