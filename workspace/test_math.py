@@ -2,8 +2,8 @@
 
 
 def add(a: int, b: int) -> int:
-    """Add two numbers. (Contains an intentional bug.)"""
-    return a * b  # Bug: should be a + b
+    """Add two numbers."""
+    return a + b
 
 
 def test_addition():

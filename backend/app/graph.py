@@ -2,7 +2,9 @@
 
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
@@ -28,7 +30,7 @@ _checkpointer = InMemorySaver()
 
 MAX_CODER_RETRIES = 3
 
-def _wrap_node(node_name: str, node_fn):
+def _wrap_node(node_name: str, node_fn: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     """Wrap a node to log start, end, duration, and token usage (if present)."""
 
     def wrapped(state: GraphState, config=None):
@@ -52,7 +54,7 @@ def _wrap_node(node_name: str, node_fn):
     return wrapped
 
 
-def _accepts_config(fn) -> bool:
+def _accepts_config(fn: Callable[..., Any]) -> bool:
     """Check if the node function accepts a config argument."""
     import inspect
     sig = inspect.signature(fn)
@@ -70,6 +72,50 @@ def _route_after_evaluator(state: GraphState) -> str:
     if retry_count >= MAX_CODER_RETRIES:
         return "end"  # Give up after max retries
     return "coder"
+
+
+def _format_interrupt_items(interrupt_data: Any) -> list[dict[str, Any]]:
+    """Normalize interrupt payload into [{value, id}] items for API responses."""
+    items = (
+        interrupt_data
+        if isinstance(interrupt_data, (list, tuple))
+        else [interrupt_data]
+    )
+    return [
+        {"value": getattr(item, "value", item), "id": getattr(item, "id", None)}
+        for item in items
+    ]
+
+
+def _build_interrupt_update(
+    merged: dict[str, Any],
+    interrupt_data: Any,
+    thread_id: str,
+) -> dict[str, Any]:
+    """Build a consistent interrupt payload used by both run and resume streams."""
+    return {
+        "merged": merged,
+        "interrupt": _format_interrupt_items(interrupt_data),
+        "thread_id": thread_id,
+    }
+
+
+def _build_initial_state(prompt: str) -> GraphState:
+    """Create the standard initial graph state for a new run."""
+    return {
+        "messages": [{"role": "user", "content": prompt}],
+        "current_plan": "",
+        "status": "started",
+        "retry_count": 0,
+    }
+
+
+def _build_resume_value(decision: str, edited_plan: str | None) -> dict[str, str]:
+    """Build resume command payload from approval decision data."""
+    resume_value = {"decision": decision}
+    if decision == "edit" and edited_plan:
+        resume_value["edited_plan"] = edited_plan
+    return resume_value
 
 
 def _build_graph():
@@ -102,25 +148,17 @@ def build_and_stream_graph(prompt: str, thread_id: str | None = None):
     thread_id = thread_id or str(uuid.uuid4())
     graph = _build_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    initial_state: GraphState = {
-        "messages": [{"role": "user", "content": prompt}],
-        "current_plan": "",
-        "status": "started",
-        "retry_count": 0,
-    }
+    initial_state = _build_initial_state(prompt)
     merged: dict = dict(initial_state)
 
     for chunk in graph.stream(initial_state, config=config, stream_mode="updates"):
         if "__interrupt__" in chunk:
             interrupt_data = chunk["__interrupt__"]
-            yield "__interrupt__", {
-                "merged": merged,
-                "interrupt": [
-                    {"value": getattr(i, "value", i), "id": getattr(i, "id", None)}
-                    for i in (interrupt_data if isinstance(interrupt_data, (list, tuple)) else [interrupt_data])
-                ],
-                "thread_id": thread_id,
-            }
+            yield "__interrupt__", _build_interrupt_update(
+                merged=merged,
+                interrupt_data=interrupt_data,
+                thread_id=thread_id,
+            )
             return
 
         for node_name, update in chunk.items():
@@ -133,12 +171,7 @@ def run_graph(prompt: str, thread_id: str | None = None) -> dict:
     thread_id = thread_id or str(uuid.uuid4())
     graph = _build_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    initial_state: GraphState = {
-        "messages": [{"role": "user", "content": prompt}],
-        "current_plan": "",
-        "status": "started",
-        "retry_count": 0,
-    }
+    initial_state = _build_initial_state(prompt)
     result = graph.invoke(initial_state, config=config)
     return {
         "messages": result["messages"],
@@ -159,9 +192,7 @@ def resume_graph(
     """
     graph = _build_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    resume_value = {"decision": decision}
-    if decision == "edit" and edited_plan:
-        resume_value["edited_plan"] = edited_plan
+    resume_value = _build_resume_value(decision, edited_plan)
 
     result = graph.invoke(Command(resume=resume_value), config=config)
 
@@ -190,9 +221,7 @@ def stream_resume_graph(thread_id: str, decision: str, edited_plan: str | None =
     """
     graph = _build_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    resume_value = {"decision": decision}
-    if decision == "edit" and edited_plan:
-        resume_value["edited_plan"] = edited_plan
+    resume_value = _build_resume_value(decision, edited_plan)
 
     # Start with current checkpoint state
     try:
@@ -205,14 +234,11 @@ def stream_resume_graph(thread_id: str, decision: str, edited_plan: str | None =
     ):
         if "__interrupt__" in chunk:
             interrupt_data = chunk["__interrupt__"]
-            yield "__interrupt__", {
-                "merged": merged,
-                "interrupt": [
-                    {"value": getattr(i, "value", i), "id": getattr(i, "id", None)}
-                    for i in (interrupt_data if isinstance(interrupt_data, (list, tuple)) else [interrupt_data])
-                ],
-                "thread_id": thread_id,
-            }
+            yield "__interrupt__", _build_interrupt_update(
+                merged=merged,
+                interrupt_data=interrupt_data,
+                thread_id=thread_id,
+            )
             return
 
         for node_name, update in chunk.items():
