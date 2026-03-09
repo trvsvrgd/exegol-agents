@@ -5,6 +5,7 @@ import re
 import threading
 import uuid
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
@@ -61,6 +62,37 @@ def _apply_state_update(update: dict) -> None:
         _execution_state["evaluation_result"] = update["evaluation_result"]
 
 
+def _handle_stream_event(node_name: str, state: object, thread_id: str) -> bool:
+    """Apply one streamed graph event. Returns True when execution is interrupted."""
+    if node_name == "__interrupt__":
+        with _state_lock:
+            _execution_state["status"] = "awaiting_approval"
+            _execution_state["current_node"] = "approval"
+            if isinstance(state, dict) and "merged" in state:
+                _apply_state_update(state["merged"])
+            if isinstance(state, dict):
+                _execution_state["__interrupt__"] = state.get("interrupt", state)
+                _execution_state["thread_id"] = state.get("thread_id", thread_id)
+            else:
+                _execution_state["__interrupt__"] = state
+                _execution_state["thread_id"] = thread_id
+        return True
+
+    with _state_lock:
+        _execution_state["current_node"] = node_name
+        _apply_state_update(state if isinstance(state, dict) else {})
+    return False
+
+
+def _consume_stream(stream: Iterable[tuple[str, object]], thread_id: str) -> None:
+    """Consume graph stream updates and persist them into in-memory execution state."""
+    for node_name, state in stream:
+        if _handle_stream_event(node_name, state, thread_id):
+            return
+    with _state_lock:
+        _execution_state["status"] = "done"
+
+
 def _run_graph_background(prompt: str, thread_id: str) -> None:
     """Run graph in thread and update _execution_state for polling."""
     with _state_lock:
@@ -73,23 +105,7 @@ def _run_graph_background(prompt: str, thread_id: str) -> None:
         _execution_state.pop("__interrupt__", None)
 
     try:
-        for node_name, state in build_and_stream_graph(prompt, thread_id=thread_id):
-            if node_name == "__interrupt__":
-                with _state_lock:
-                    _execution_state["status"] = "awaiting_approval"
-                    _execution_state["current_node"] = "approval"
-                    if isinstance(state, dict) and "merged" in state:
-                        _apply_state_update(state["merged"])
-                    _execution_state["__interrupt__"] = state.get("interrupt", state)
-                    _execution_state["thread_id"] = state.get("thread_id", thread_id)
-                return
-
-            with _state_lock:
-                _execution_state["current_node"] = node_name
-                _apply_state_update(state if isinstance(state, dict) else {})
-
-        with _state_lock:
-            _execution_state["status"] = "done"
+        _consume_stream(build_and_stream_graph(prompt, thread_id=thread_id), thread_id=thread_id)
     except Exception as e:
         with _state_lock:
             _execution_state["status"] = "error"
@@ -104,24 +120,10 @@ def _run_resume_background(thread_id: str, decision: str, edited_plan: str | Non
         _execution_state["thread_id"] = thread_id
 
     try:
-        for node_name, state in stream_resume_graph(
-            thread_id, decision=decision, edited_plan=edited_plan
-        ):
-            if node_name == "__interrupt__":
-                with _state_lock:
-                    _execution_state["status"] = "awaiting_approval"
-                    if isinstance(state, dict) and "merged" in state:
-                        _apply_state_update(state["merged"])
-                    _execution_state["__interrupt__"] = state.get("interrupt", state)
-                    _execution_state["thread_id"] = state.get("thread_id", thread_id)
-                return
-
-            with _state_lock:
-                _execution_state["current_node"] = node_name
-                _apply_state_update(state if isinstance(state, dict) else {})
-
-        with _state_lock:
-            _execution_state["status"] = "done"
+        _consume_stream(
+            stream_resume_graph(thread_id, decision=decision, edited_plan=edited_plan),
+            thread_id=thread_id,
+        )
     except Exception as e:
         with _state_lock:
             _execution_state["status"] = "error"
