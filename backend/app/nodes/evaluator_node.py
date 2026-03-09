@@ -1,9 +1,7 @@
 """Evaluator node: LLM-based review of Coder output against user prompt and approved plan."""
 
 import logging
-from pathlib import Path
 
-import yaml
 from langchain_community.chat_models import ChatOllama
 from langgraph.types import RunnableConfig
 
@@ -12,10 +10,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
+from app.nodes.shared_utils import extract_json_object, load_agent_config
 from app.state import GraphState
 
 logger = logging.getLogger(__name__)
-CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "config" / "agents.yaml"
 
 
 class EvaluationResult(BaseModel):
@@ -25,21 +23,6 @@ class EvaluationResult(BaseModel):
     feedback: str = Field(
         description="If success is false, actionable feedback for the Coder to improve. If success is true, brief confirmation or empty string."
     )
-
-
-def _load_evaluator_config() -> dict:
-    """Load evaluator model config from config/agents.yaml if present."""
-    if not CONFIG_PATH.exists():
-        return {"model": "qwen2.5-coder", "base_url": "http://localhost:11434"}
-    try:
-        data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
-        evaluator = data.get("evaluator", {})
-        return {
-            "model": evaluator.get("model", "qwen2.5-coder"),
-            "base_url": evaluator.get("base_url", "http://localhost:11434"),
-        }
-    except Exception:
-        return {"model": "qwen2.5-coder", "base_url": "http://localhost:11434"}
 
 
 def _get_user_prompt(state: GraphState) -> str:
@@ -77,10 +60,10 @@ def evaluator_node(state: GraphState, config: RunnableConfig | None = None) -> d
     Review Coder output against the original user prompt and approved plan using local Ollama.
     Returns structured evaluation with success flag and feedback string.
     """
-    config = _load_evaluator_config()
+    model_config = load_agent_config("evaluator")
     llm = ChatOllama(
-        model=config["model"],
-        base_url=config["base_url"],
+        model=model_config["model"],
+        base_url=model_config["base_url"],
         format="json",
     )
 
@@ -122,11 +105,7 @@ Evaluate and output JSON:"""
     try:
         response = llm.invoke(messages)
         raw = response.content if hasattr(response, "content") else str(response)
-        if "```" in raw:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
+        raw = extract_json_object(raw)
         evaluation = parser.parse(raw)
         logger.debug(
             "Evaluator result: success=%s feedback=%r",

@@ -1,7 +1,6 @@
 """Planner node: local Ollama for task decomposition with structured JSON output."""
 from pathlib import Path
 
-import yaml
 from langchain_community.chat_models import ChatOllama
 from langgraph.types import RunnableConfig
 
@@ -10,10 +9,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
+from app.nodes.shared_utils import extract_json_object, load_agent_config
 from app.state import GraphState
 
 WORKSPACE_PLAN_PATH = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "plan.md"
-CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "config" / "agents.yaml"
 
 
 class TaskPlan(BaseModel):
@@ -28,27 +27,12 @@ class TaskPlan(BaseModel):
     )
 
 
-def _load_planner_config() -> dict:
-    """Load planner model config from config/agents.yaml if present."""
-    if not CONFIG_PATH.exists():
-        return {"model": "qwen2.5-coder", "base_url": "http://localhost:11434"}
-    try:
-        data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
-        planner = data.get("planner", {})
-        return {
-            "model": planner.get("model", "qwen2.5-coder"),
-            "base_url": planner.get("base_url", "http://localhost:11434"),
-        }
-    except Exception:
-        return {"model": "qwen2.5-coder", "base_url": "http://localhost:11434"}
-
-
 def planner_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
     """Reads user message and plan.md, outputs a structured task for the coder via local Ollama."""
-    config = _load_planner_config()
+    model_config = load_agent_config("planner")
     llm = ChatOllama(
-        model=config["model"],
-        base_url=config["base_url"],
+        model=model_config["model"],
+        base_url=model_config["base_url"],
         format="json",
     )
 
@@ -92,12 +76,7 @@ Output the task plan as JSON:"""
     try:
         response = llm.invoke(messages)
         raw = response.content if hasattr(response, "content") else str(response)
-        # Handle markdown code blocks if the model wraps JSON
-        if "```" in raw:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
+        raw = extract_json_object(raw)
         plan = parser.parse(raw)
         task = plan.task_description
         planner_content = task
