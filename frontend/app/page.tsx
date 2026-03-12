@@ -23,6 +23,7 @@ type StatusResponse = {
   current_node: string | null;
   messages: Array<{ role: string; content: string }>;
   current_plan: string;
+  routed_intent?: string;
   evaluation_result: Record<string, unknown> | null;
   thread_id?: string;
   __interrupt__?: InterruptPayload;
@@ -56,10 +57,12 @@ function extractTaskDescription(interrupt: InterruptPayload | undefined): string
 }
 
 const NODE_LABELS: Record<string, string> = {
+  router: "Routing intent...",
   planner: "Planner is thinking...",
   approval: "Awaiting approval...",
   coder: "Coder is writing...",
   evaluator: "Evaluator is testing...",
+  explorer: "Exploring codebase...",
 };
 
 function getStatusLabel(status: ExecutionStatus, node: string | null): string {
@@ -81,6 +84,7 @@ export default function Dashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [backendUnreachable, setBackendUnreachable] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -119,14 +123,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  const startPolling = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => {
-      fetchStatus();
-      fetchPlan();
-    }, 800);
-  }, [fetchStatus, fetchPlan]);
-
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -134,12 +130,50 @@ export default function Dashboard() {
     }
   }, []);
 
+  const disconnectSSE = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    stopPolling();
+  }, [stopPolling]);
+
+  const connectSSE = useCallback(() => {
+    if (eventSourceRef.current) return;
+    const url = `${API_BASE}/api/status/stream`;
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data) as StatusResponse;
+        setStatus(data);
+        setBackendUnreachable(false);
+        if (data.status === "done" || data.status === "error") {
+          disconnectSSE();
+          fetchPlan();
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+    es.onerror = () => {
+      disconnectSSE();
+      fetchStatus(); // fallback to one-time fetch
+    };
+  }, [fetchStatus, fetchPlan, disconnectSSE]);
+
+  const startStreaming = useCallback(() => {
+    if (eventSourceRef.current) return; // already streaming
+    connectSSE();
+    pollRef.current = setInterval(fetchPlan, 3000);
+  }, [connectSSE, fetchPlan]);
+
   useEffect(() => {
     fetchHealth();
     fetchStatus();
     fetchPlan();
-    return () => stopPolling();
-  }, [fetchHealth, fetchStatus, fetchPlan, stopPolling]);
+    return () => disconnectSSE();
+  }, [fetchHealth, fetchStatus, fetchPlan, disconnectSSE]);
 
   useEffect(() => {
     const t = setInterval(fetchHealth, 15000);
@@ -151,13 +185,13 @@ export default function Dashboard() {
       status?.status === "running" ||
       status?.status === "awaiting_approval"
     )
-      startPolling();
+      startStreaming();
     else if (status?.status === "done" || status?.status === "error") {
-      stopPolling();
+      disconnectSSE();
       fetchStatus();
       fetchPlan();
     }
-  }, [status?.status, startPolling, stopPolling, fetchStatus, fetchPlan]);
+  }, [status?.status, startStreaming, disconnectSSE, fetchStatus, fetchPlan]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,7 +204,7 @@ export default function Dashboard() {
         body: JSON.stringify({ prompt: prompt.trim() }),
       });
       if (res.ok) {
-        startPolling();
+        startStreaming();
         fetchStatus();
       }
     } finally {
@@ -195,18 +229,18 @@ export default function Dashboard() {
         }),
       });
       if (res.ok) {
-        startPolling();
+        startStreaming();
         fetchStatus();
       }
     },
-    [status?.thread_id, startPolling, fetchStatus]
+    [status?.thread_id, startStreaming, fetchStatus]
   );
 
   const lastUserMessage = status?.messages?.find((m) => m.role === "user");
   const lastAgentMessage = [...(status?.messages ?? [])]
     .reverse()
     .find((m) =>
-      ["assistant", "planner", "coder"].includes(String(m.role))
+      ["assistant", "router", "planner", "coder", "explorer"].includes(String(m.role))
     );
   const evalResult = status?.evaluation_result;
 

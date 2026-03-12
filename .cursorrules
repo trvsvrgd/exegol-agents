@@ -2,7 +2,7 @@
 
 ## Source of Truth
 - **TECH_SPEC.md**: Project vision, stack, constraints.
-- **PLAN.md**: Roadmap; update before new features.
+- **PLAN.md**: Roadmap; update before new features and after completing any roadmap task.
 - Resolve conflicts with user prompt by asking.
 
 ## Coding

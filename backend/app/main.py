@@ -1,6 +1,8 @@
 import ast
 import asyncio
+import json
 import os
+import queue
 import re
 import threading
 import uuid
@@ -12,6 +14,7 @@ from urllib.error import URLError
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.graph import build_and_stream_graph, stream_resume_graph
@@ -40,6 +43,22 @@ _execution_state: dict = {
 }
 _state_lock = threading.Lock()
 
+# SSE broadcast: background thread pushes state to these queues
+_sse_queues: list[queue.Queue] = []
+_sse_lock = threading.Lock()
+
+
+def _broadcast_state() -> None:
+    """Push current execution state to all SSE listeners."""
+    with _state_lock:
+        snapshot = {k: v for k, v in _execution_state.items()}
+    with _sse_lock:
+        for q in _sse_queues:
+            try:
+                q.put_nowait(snapshot)
+            except queue.Full:
+                pass
+
 
 class RunRequest(BaseModel):
     prompt: str
@@ -57,20 +76,23 @@ def _apply_state_update(update: dict) -> None:
         _execution_state["messages"] = update["messages"]
     if "current_plan" in update and update.get("current_plan") is not None:
         _execution_state["current_plan"] = update["current_plan"]
+    if "routed_intent" in update and update.get("routed_intent") is not None:
+        _execution_state["routed_intent"] = update["routed_intent"]
     if "evaluation_result" in update and update.get("evaluation_result") is not None:
         _execution_state["evaluation_result"] = update["evaluation_result"]
 
 
 def _run_graph_background(prompt: str, thread_id: str) -> None:
-    """Run graph in thread and update _execution_state for polling."""
+    """Run graph in thread and update _execution_state for polling and SSE."""
     with _state_lock:
         _execution_state["status"] = "running"
-        _execution_state["current_node"] = "planner"
+        _execution_state["current_node"] = "router"
         _execution_state["messages"] = [{"role": "user", "content": prompt}]
         _execution_state["current_plan"] = ""
         _execution_state["evaluation_result"] = None
         _execution_state["thread_id"] = thread_id
         _execution_state.pop("__interrupt__", None)
+    _broadcast_state()
 
     try:
         for node_name, state in build_and_stream_graph(prompt, thread_id=thread_id):
@@ -82,18 +104,22 @@ def _run_graph_background(prompt: str, thread_id: str) -> None:
                         _apply_state_update(state["merged"])
                     _execution_state["__interrupt__"] = state.get("interrupt", state)
                     _execution_state["thread_id"] = state.get("thread_id", thread_id)
+                _broadcast_state()
                 return
 
             with _state_lock:
                 _execution_state["current_node"] = node_name
                 _apply_state_update(state if isinstance(state, dict) else {})
+            _broadcast_state()
 
         with _state_lock:
             _execution_state["status"] = "done"
+        _broadcast_state()
     except Exception as e:
         with _state_lock:
             _execution_state["status"] = "error"
             _execution_state["error"] = str(e)
+        _broadcast_state()
 
 
 def _run_resume_background(thread_id: str, decision: str, edited_plan: str | None) -> None:
@@ -102,6 +128,7 @@ def _run_resume_background(thread_id: str, decision: str, edited_plan: str | Non
         _execution_state["status"] = "running"
         _execution_state["current_node"] = "approval"
         _execution_state["thread_id"] = thread_id
+    _broadcast_state()
 
     try:
         for node_name, state in stream_resume_graph(
@@ -114,18 +141,22 @@ def _run_resume_background(thread_id: str, decision: str, edited_plan: str | Non
                         _apply_state_update(state["merged"])
                     _execution_state["__interrupt__"] = state.get("interrupt", state)
                     _execution_state["thread_id"] = state.get("thread_id", thread_id)
+                _broadcast_state()
                 return
 
             with _state_lock:
                 _execution_state["current_node"] = node_name
                 _apply_state_update(state if isinstance(state, dict) else {})
+            _broadcast_state()
 
         with _state_lock:
             _execution_state["status"] = "done"
+        _broadcast_state()
     except Exception as e:
         with _state_lock:
             _execution_state["status"] = "error"
             _execution_state["error"] = str(e)
+        _broadcast_state()
 
 
 @app.get("/")
@@ -224,6 +255,43 @@ async def get_status():
     with _state_lock:
         out = {k: v for k, v in _execution_state.items()}
     return out
+
+
+def _sse_event_generator():
+    """Generator for SSE stream. Runs in thread; yields raw SSE bytes."""
+    client_queue: queue.Queue = queue.Queue(maxsize=64)
+    with _sse_lock:
+        _sse_queues.append(client_queue)
+    try:
+        # Send initial state
+        with _state_lock:
+            snapshot = {k: v for k, v in _execution_state.items()}
+        yield f"data: {json.dumps(snapshot)}\n\n"
+        # Stream updates (block with timeout for keepalive)
+        while True:
+            try:
+                data = client_queue.get(timeout=15)
+                yield f"data: {json.dumps(data)}\n\n"
+            except queue.Empty:
+                yield ": keepalive\n\n"
+    finally:
+        with _sse_lock:
+            if client_queue in _sse_queues:
+                _sse_queues.remove(client_queue)
+
+
+@app.get("/api/status/stream")
+async def stream_status():
+    """Stream graph execution state via Server-Sent Events for real-time UI updates."""
+    return StreamingResponse(
+        _sse_event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/plan")

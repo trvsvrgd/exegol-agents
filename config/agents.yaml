@@ -1,6 +1,10 @@
-# Agent model configuration (planner, coder, evaluator)
+# Agent model configuration (router, coder, evaluator)
 # All use local Ollama - no cloud API needed
-planner:
+router:
+  model: qwen2.5-coder
+  base_url: http://localhost:11434
+
+planner:  # legacy alias, router falls back to this if router not present
   model: qwen2.5-coder
   base_url: http://localhost:11434
 
