@@ -11,3 +11,8 @@ planner:  # legacy alias, router falls back to this if router not present
 evaluator:
   model: qwen2.5-coder
   base_url: http://localhost:11434
+
+# Memory & context (Task 2.2): Chroma vector store for past decisions and SOPs
+# Requires: ollama pull nomic-embed-text
+memory:
+  embedding_model: nomic-embed-text

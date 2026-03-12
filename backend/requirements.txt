@@ -5,6 +5,8 @@ pyyaml
 langgraph
 langchain-community
 langchain-core
+langchain-ollama
+chromadb
 docker
 mcp
 pytest

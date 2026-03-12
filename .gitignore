@@ -29,6 +29,9 @@ build/
 # Logs
 exegol.log
 
+# Coordinator memory (Chroma vector store)
+data/
+
 # OS
 .DS_Store
 Thumbs.db

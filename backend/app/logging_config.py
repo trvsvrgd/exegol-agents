@@ -10,6 +10,8 @@ LOGGER_NAME = "exegol"
 
 # Key for LLM nodes to pass token usage to the graph wrapper (stripped before state merge)
 LOG_TOKEN_USAGE_KEY = "_log_token_usage"
+# Key for Coder to pass tool call count to the graph wrapper (stripped before state merge)
+LOG_TOOL_CALLS_KEY = "_log_tool_calls"
 
 # Format: timestamp | level | thread_id | message
 _LOG_FORMAT = "%(asctime)s | %(levelname)s | thread_id=%(thread_id)s | %(message)s"
@@ -59,13 +61,16 @@ def log_node_end(
     thread_id: str | None,
     duration_sec: float,
     token_usage: dict | None = None,
+    tool_calls: int | None = None,
 ) -> None:
-    """Log the end of a node execution with duration and optional token usage."""
+    """Log the end of a node execution with duration, optional token usage, and optional tool call count."""
     logger = configure_logging()
     extra = _ensure_thread_id({"thread_id": thread_id or "-"}, thread_id)
     parts = [f"node={node_name} event=end duration_sec={duration_sec:.3f}"]
     if token_usage:
         parts.append(f"token_usage={token_usage}")
+    if tool_calls is not None:
+        parts.append(f"tool_calls={tool_calls}")
     logger.info(
         " ".join(parts),
         extra=extra,

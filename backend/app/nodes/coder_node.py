@@ -6,7 +6,7 @@ from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import RunnableConfig
 
-from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
+from app.logging_config import LOG_TOKEN_USAGE_KEY, LOG_TOOL_CALLS_KEY, extract_usage_from_response
 from app.state import GraphState
 from app.tools.mcp_client import get_sandbox_mcp_tools
 
@@ -145,4 +145,5 @@ def coder_node(state: GraphState, config: RunnableConfig | None = None) -> dict:
         out[LOG_TOKEN_USAGE_KEY] = usage
     if tool_entries:
         out["coder_tool_results"] = _format_tool_results(tool_entries)
+        out[LOG_TOOL_CALLS_KEY] = len(tool_entries)
     return out

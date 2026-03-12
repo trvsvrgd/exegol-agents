@@ -247,10 +247,20 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen flex-col bg-[#050508] text-zinc-100">
       <header className="border-b border-[#1f1f24] px-6 py-4 bg-black/30">
-        <h1 className="text-xl font-semibold tracking-tight bg-gradient-to-r from-red-600 via-amber-600 to-violet-500 bg-clip-text text-transparent">
-          Exegol Control Dashboard
-        </h1>
-        <p className="text-xs text-zinc-500 mt-1">Sith-powered agent orchestration</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight bg-gradient-to-r from-red-600 via-amber-600 to-violet-500 bg-clip-text text-transparent">
+              Exegol Control Dashboard
+            </h1>
+            <p className="text-xs text-zinc-500 mt-1">Sith-powered agent orchestration</p>
+          </div>
+          <a
+            href="/manager"
+            className="text-sm text-zinc-400 hover:text-violet-400 transition-colors"
+          >
+            Manager Dashboard →
+          </a>
+        </div>
       </header>
 
       <div className="flex flex-1 min-h-0">

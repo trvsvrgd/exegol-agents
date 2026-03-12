@@ -9,6 +9,7 @@ from langgraph.types import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
+from app.memory import retrieve_relevant
 from app.state import GraphState
 
 WORKSPACE_PLAN_PATH = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "plan.md"
@@ -87,6 +88,8 @@ def router_node(state: GraphState, config: RunnableConfig | None = None) -> dict
     if WORKSPACE_PLAN_PATH.exists():
         plan_content = WORKSPACE_PLAN_PATH.read_text(encoding="utf-8")
 
+    memory_context = retrieve_relevant(user_text, k=5)
+
     system = """You are a task router for a coding agent platform. Assess the user's intent and produce a routing decision.
 
 Routing intents:
@@ -95,7 +98,9 @@ Routing intents:
 - explore: User wants to read files, understand structure, browse the codebase, or inspect without making changes.
 
 Output ONLY valid JSON matching the schema. No markdown, no extra text.
-{format_instructions}"""
+{format_instructions}
+
+When relevant, consider past architectural decisions and SOPs from memory to inform routing and task planning."""
 
     user_msg = state["messages"][-1] if state["messages"] else {}
     user_text = (
@@ -104,11 +109,15 @@ Output ONLY valid JSON matching the schema. No markdown, no extra text.
         else getattr(user_msg, "content", str(user_msg))
     )
 
+    memory_section = ""
+    if memory_context:
+        memory_section = f"\nRelevant past decisions/SOPs from memory:\n{memory_context}\n"
+
     prompt = f"""User request: {user_text}
 
 Existing plan (if any):
 {plan_content or "(none)"}
-
+{memory_section}
 Output the routing decision as JSON:"""
 
     messages = [

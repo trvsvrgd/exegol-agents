@@ -307,11 +307,13 @@ async def get_plan():
 
 
 # Log line format: timestamp | level | thread_id=XXX | message
-# message can be: "node=NAME event=start" or "node=NAME event=end duration_sec=X.XXX token_usage={...}"
+# message can be: "node=NAME event=start" or "node=NAME event=end duration_sec=X.XXX token_usage={...} tool_calls=N"
 _LOG_LINE_RE = re.compile(
     r"^(.+?)\s*\|\s*(\w+)\s*\|\s*thread_id=([^\s|]+)\s*\|\s*(.*)$"
 )
-_NODE_EVENT_RE = re.compile(r"node=(\S+)\s+event=(\w+)(?:\s+duration_sec=([\d.]+))?(?:\s+token_usage=(.+))?$")
+_NODE_EVENT_RE = re.compile(
+    r"node=(\S+)\s+event=(\w+)(?:\s+duration_sec=([\d.]+))?(?:\s+token_usage=(\{[^{}]+\}))?(?:\s+tool_calls=(\d+))?"
+)
 _TOKEN_USAGE_RE = re.compile(r"^\{.+\}$")
 
 
@@ -330,8 +332,8 @@ def _parse_log_line(line: str) -> dict | None:
         "thread_id": thread_id.strip(),
         "message": msg.strip(),
     }
-    # Parse node/event/duration/token_usage from message
-    ne = _NODE_EVENT_RE.match(msg.strip())
+    msg_stripped = msg.strip()
+    ne = _NODE_EVENT_RE.match(msg_stripped)
     if ne:
         entry["node"] = ne.group(1)
         entry["event"] = ne.group(2)
@@ -345,6 +347,24 @@ def _parse_log_line(line: str) -> dict | None:
             try:
                 entry["token_usage"] = ast.literal_eval(tu_str)
             except (ValueError, SyntaxError):
+                pass
+        if ne.group(5):
+            try:
+                entry["tool_calls"] = int(ne.group(5))
+            except (TypeError, ValueError):
+                pass
+    else:
+        tc_match = re.search(r"tool_calls=(\d+)", msg_stripped)
+        if tc_match:
+            try:
+                entry["tool_calls"] = int(tc_match.group(1))
+            except ValueError:
+                pass
+        dur_match = re.search(r"duration_sec=([\d.]+)", msg_stripped)
+        if dur_match:
+            try:
+                entry["duration_sec"] = float(dur_match.group(1))
+            except (TypeError, ValueError):
                 pass
     return entry
 
@@ -366,6 +386,152 @@ async def get_telemetry():
         if parsed:
             entries.append(parsed)
     return {"entries": entries}
+
+
+def _compute_drift_metrics(entries: list[dict]) -> dict:
+    """
+    Aggregate log entries into drift metrics for the Manager Dashboard.
+    Tracks: latency by node, token usage trends, redundant tool usage, reasoning coherence.
+    """
+    from collections import defaultdict
+    from datetime import datetime
+
+    # Group end events by thread (sessions)
+    sessions: dict[str, list[dict]] = defaultdict(list)
+    for e in entries:
+        if e.get("event") != "end":
+            continue
+        tid = e.get("thread_id", "-")
+        if tid == "-":
+            continue
+        sessions[tid].append(e)
+
+    # Latency by node (all sessions)
+    latency_by_node: dict[str, list[float]] = defaultdict(list)
+    token_by_node: dict[str, list[int]] = defaultdict(list)
+    tool_calls_per_coder: list[int] = []
+
+    for tid, evts in sessions.items():
+        coder_count = 0
+        evaluator_count = 0
+        for e in evts:
+            node = e.get("node", "")
+            dur = e.get("duration_sec")
+            if dur is not None:
+                latency_by_node[node].append(dur)
+            tu = e.get("token_usage") or {}
+            total_tok = tu.get("total") or (
+                (tu.get("prompt_eval_count") or 0) + (tu.get("eval_count") or 0)
+            )
+            if total_tok:
+                token_by_node[node].append(total_tok)
+            tc = e.get("tool_calls")
+            if node == "coder":
+                coder_count += 1
+                if tc is not None:
+                    tool_calls_per_coder.append(tc)
+            elif node == "evaluator":
+                evaluator_count += 1
+
+        # Sessions with >1 coder run had evaluator retries (reasoning coherence proxy)
+        # Redundant tool usage: high tool calls per coder run
+
+    # Compute stats
+    def _percentile(arr: list[float], p: float) -> float | None:
+        if not arr:
+            return None
+        s = sorted(arr)
+        idx = max(0, int(len(s) * p / 100) - 1)
+        return s[min(idx, len(s) - 1)]
+
+    def _avg(arr: list) -> float | None:
+        if not arr:
+            return None
+        return sum(arr) / len(arr)
+
+    latency_series: dict[str, dict] = {}
+    for node, durs in latency_by_node.items():
+        if durs:
+            latency_series[node] = {
+                "avg_sec": round(_avg(durs) or 0, 2),
+                "p50_sec": round(_percentile(durs, 50) or 0, 2),
+                "p95_sec": round(_percentile(durs, 95) or 0, 2),
+                "count": len(durs),
+            }
+
+    token_series: dict[str, dict] = {}
+    for node, toks in token_by_node.items():
+        if toks:
+            token_series[node] = {
+                "avg_tokens": round(_avg(toks) or 0, 0),
+                "total_tokens": sum(toks),
+                "count": len(toks),
+            }
+
+    total_sessions = len(sessions)
+    sessions_with_retries = sum(
+        1 for evts in sessions.values()
+        if sum(1 for e in evts if e.get("node") == "coder") > 1
+    )
+    retry_rate = (
+        round(sessions_with_retries / total_sessions * 100, 1)
+        if total_sessions else 0
+    )
+
+    return {
+        "latency_by_node": latency_series,
+        "token_usage_by_node": token_series,
+        "redundant_tool_usage": {
+            "avg_tool_calls_per_coder_run": round(
+                _avg(tool_calls_per_coder) or 0, 1
+            ),
+            "max_tool_calls_in_run": max(tool_calls_per_coder, default=0),
+            "coder_runs_with_tool_data": len(tool_calls_per_coder),
+        },
+        "reasoning_coherence": {
+            "evaluator_pass_rate_pct": round(100 - retry_rate, 1),
+            "sessions_with_retries": sessions_with_retries,
+            "total_sessions": total_sessions,
+        },
+        "entries_analyzed": len([e for e in entries if e.get("event") == "end"]),
+    }
+
+
+@app.get("/api/drift")
+async def get_drift():
+    """
+    Return aggregated drift metrics for the Manager Dashboard.
+    Parses exegol.log to compute latency trends, token usage, redundant tool usage, and reasoning coherence.
+    """
+    try:
+        with open(LOG_PATH, encoding="utf-8") as f:
+            lines = list(f)
+    except FileNotFoundError:
+        return {
+            "latency_by_node": {},
+            "token_usage_by_node": {},
+            "redundant_tool_usage": {"avg_tool_calls_per_coder_run": 0, "max_tool_calls_in_run": 0, "coder_runs_with_tool_data": 0},
+            "reasoning_coherence": {"evaluator_pass_rate_pct": 0, "sessions_with_retries": 0, "total_sessions": 0},
+            "entries_analyzed": 0,
+            "error": "exegol.log not found",
+        }
+    except OSError as e:
+        return {
+            "latency_by_node": {},
+            "token_usage_by_node": {},
+            "redundant_tool_usage": {"avg_tool_calls_per_coder_run": 0, "max_tool_calls_in_run": 0, "coder_runs_with_tool_data": 0},
+            "reasoning_coherence": {"evaluator_pass_rate_pct": 0, "sessions_with_retries": 0, "total_sessions": 0},
+            "entries_analyzed": 0,
+            "error": str(e),
+        }
+
+    entries = []
+    for line in lines[-10000:]:
+        parsed = _parse_log_line(line)
+        if parsed:
+            entries.append(parsed)
+
+    return _compute_drift_metrics(entries)
 
 
 @app.post("/api/run")

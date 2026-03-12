@@ -9,12 +9,12 @@
 
 ## Phase 2: Orchestrator Maturation (The Coordinator)
 - [x] **Task 2.1: Dynamic Routing.** Upgrade the Planner to a dynamic Router. Give the local model the ability to assess user intent and route tasks to specialized sub-agents rather than a linear pipeline.
-- [ ] **Task 2.2: Memory & Context.** Implement a local vector store (e.g., Chroma) so the Coordinator can retrieve past architectural decisions and standard operating procedures (SOPs).
+- [x] **Task 2.2: Memory & Context.** Implement a local vector store (e.g., Chroma) so the Coordinator can retrieve past architectural decisions and standard operating procedures (SOPs).
 - [x] **Task 2.3: Human-in-the-Loop (HITL) Checkpoints.** Implement LangGraph's `interrupt` capability before any high-stakes execution node. The graph pauses, persists its state with InMemorySaver, and waits for human approval via `POST /api/decision` (approve/edit/reject) before the Coder runs.
 
 ## Phase 3: The "Agent Manager" Lifecycle (Evaluation & Drift)
 - [x] **Task 3.1: Session-Level Evaluation (The Evaluator Node).** Evaluator node in `app/nodes/evaluator_node.py` grades Coder output against user prompt and approved plan. Rubric: success/fail + feedback. Routes back to Coder on failure (max 3 retries via `retry_count` in state); routes to END on success.
-- [ ] **Task 3.2: Long-Term Drift Detection (The Manager Dashboard).** Create a dashboard in the Next.js UI that tracks "Behavioral Drift." Monitor metrics over time: frequency of redundant tool usage, latency degradation, and reasoning coherence across sessions.
+- [x] **Task 3.2: Long-Term Drift Detection (The Manager Dashboard).** Create a dashboard in the Next.js UI that tracks "Behavioral Drift." Monitor metrics over time: frequency of redundant tool usage, latency degradation, and reasoning coherence across sessions.
 - [ ] **Task 3.3: The "Coaching" Mechanism.** Implement a feedback loop where the Agent Manager (you) can flag a drifted response in the UI, provide a text correction, and write that correction to the agent's long-term vector memory as a new SOP ("Standard Operating Procedure").
 
 ## Verification Evidence

@@ -13,6 +13,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from app.logging_config import (
     LOG_TOKEN_USAGE_KEY,
+    LOG_TOOL_CALLS_KEY,
     log_node_end,
     log_node_start,
 )
@@ -43,11 +44,15 @@ def _wrap_node(node_name: str, node_fn):
             log_node_end(node_name, thread_id, time.perf_counter() - t0, None)
             raise
         token_usage = None
-        if isinstance(result, dict) and LOG_TOKEN_USAGE_KEY in result:
-            token_usage = result.pop(LOG_TOKEN_USAGE_KEY)
+        tool_calls = None
+        if isinstance(result, dict):
+            if LOG_TOKEN_USAGE_KEY in result:
+                token_usage = result.pop(LOG_TOKEN_USAGE_KEY)
+            if LOG_TOOL_CALLS_KEY in result:
+                tool_calls = result.pop(LOG_TOOL_CALLS_KEY)
             if not result:
                 result = {}
-        log_node_end(node_name, thread_id, time.perf_counter() - t0, token_usage)
+        log_node_end(node_name, thread_id, time.perf_counter() - t0, token_usage, tool_calls)
         return result
 
     return wrapped

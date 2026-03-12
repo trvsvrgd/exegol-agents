@@ -8,6 +8,8 @@ from langchain_community.chat_models import ChatOllama
 from langgraph.types import RunnableConfig
 
 from app.logging_config import LOG_TOKEN_USAGE_KEY, extract_usage_from_response
+from app.memory import add_to_memory
+from app.memory.vector_store import TYPE_ARCHITECTURAL_DECISION
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
@@ -141,6 +143,10 @@ Evaluate and output JSON:"""
     message = (
         f"[Evaluator] Task {'passed' if evaluation.success else 'failed'}.\n\n{evaluation.feedback}"
     )
+
+    if evaluation.success:
+        memory_content = f"User request: {user_prompt}\nApproved plan: {approved_plan}\nOutcome: {evaluation.feedback or 'Task completed successfully'}."
+        add_to_memory(memory_content, doc_type=TYPE_ARCHITECTURAL_DECISION)
 
     update: dict = {
         "messages": state["messages"] + [{"role": "evaluator", "content": message}],
