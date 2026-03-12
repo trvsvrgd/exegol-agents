@@ -5,6 +5,7 @@ class GraphState(TypedDict):
     messages: list[Any]
     current_plan: str
     status: str
+    routed_intent: NotRequired[str]  # implement | plan_only | explore (from router)
     evaluation_result: NotRequired[dict[str, Any]]
     evaluator_feedback: NotRequired[str]  # Feedback for Coder retry when evaluation fails
     retry_count: NotRequired[int]  # Coder retries after evaluator failure; max 3

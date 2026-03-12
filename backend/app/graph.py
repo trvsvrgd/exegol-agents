@@ -13,15 +13,17 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from app.logging_config import (
     LOG_TOKEN_USAGE_KEY,
+    LOG_TOOL_CALLS_KEY,
     log_node_end,
     log_node_start,
 )
 from app.state import GraphState
-from app.nodes.planner_node import planner_node
+from app.nodes.router_node import router_node, INTENT_IMPLEMENT, INTENT_PLAN_ONLY, INTENT_EXPLORE
 from app.nodes.approval_node import approval_node
 from app.nodes.coder_node import coder_node
 from app.nodes.rejected_node import rejected_node
 from app.nodes.evaluator_node import evaluator_node
+from app.nodes.explorer_node import explorer_node
 
 # Module-level checkpointer for state persistence across invoke and resume
 _checkpointer = InMemorySaver()
@@ -42,11 +44,15 @@ def _wrap_node(node_name: str, node_fn):
             log_node_end(node_name, thread_id, time.perf_counter() - t0, None)
             raise
         token_usage = None
-        if isinstance(result, dict) and LOG_TOKEN_USAGE_KEY in result:
-            token_usage = result.pop(LOG_TOKEN_USAGE_KEY)
+        tool_calls = None
+        if isinstance(result, dict):
+            if LOG_TOKEN_USAGE_KEY in result:
+                token_usage = result.pop(LOG_TOKEN_USAGE_KEY)
+            if LOG_TOOL_CALLS_KEY in result:
+                tool_calls = result.pop(LOG_TOOL_CALLS_KEY)
             if not result:
                 result = {}
-        log_node_end(node_name, thread_id, time.perf_counter() - t0, token_usage)
+        log_node_end(node_name, thread_id, time.perf_counter() - t0, token_usage, tool_calls)
         return result
 
     return wrapped
@@ -58,6 +64,16 @@ def _accepts_config(fn) -> bool:
     sig = inspect.signature(fn)
     params = list(sig.parameters)
     return len(params) >= 2
+
+
+def _route_after_router(state: GraphState) -> str:
+    """Route to specialized sub-agents based on assessed intent."""
+    intent = state.get("routed_intent", INTENT_IMPLEMENT)
+    if intent == INTENT_PLAN_ONLY:
+        return "end"
+    if intent == INTENT_EXPLORE:
+        return "explorer"
+    return "approval"
 
 
 def _route_after_evaluator(state: GraphState) -> str:
@@ -73,18 +89,28 @@ def _route_after_evaluator(state: GraphState) -> str:
 
 
 def _build_graph():
-    """Build and compile the LangGraph workflow with HITL approval before Coder."""
+    """Build and compile the LangGraph workflow with dynamic routing and HITL before Coder."""
     graph_builder = StateGraph(GraphState)
-    graph_builder.add_node("planner", _wrap_node("planner", planner_node))
+    graph_builder.add_node("router", _wrap_node("router", router_node))
     graph_builder.add_node("approval", _wrap_node("approval", approval_node))
     graph_builder.add_node("coder", _wrap_node("coder", coder_node))
     graph_builder.add_node("rejected", _wrap_node("rejected", rejected_node))
     graph_builder.add_node("evaluator", _wrap_node("evaluator", evaluator_node))
+    graph_builder.add_node("explorer", _wrap_node("explorer", explorer_node))
 
-    graph_builder.add_edge(START, "planner")
-    graph_builder.add_edge("planner", "approval")
+    graph_builder.add_edge(START, "router")
+    graph_builder.add_conditional_edges(
+        "router",
+        _route_after_router,
+        {
+            "end": END,
+            "approval": "approval",
+            "explorer": "explorer",
+        },
+    )
     # approval -> coder or approval -> rejected via Command(goto=...) in approval_node
     graph_builder.add_edge("rejected", END)
+    graph_builder.add_edge("explorer", END)
     graph_builder.add_edge("coder", "evaluator")
     graph_builder.add_conditional_edges(
         "evaluator",
@@ -129,7 +155,7 @@ def build_and_stream_graph(prompt: str, thread_id: str | None = None):
 
 
 def run_graph(prompt: str, thread_id: str | None = None) -> dict:
-    """Run the graph: START -> Planner -> Approval (interrupt) -> Coder -> Evaluator -> [END | Planner]."""
+    """Run the graph: START -> Router -> [Approval->Coder->Evaluator | Explorer | END (plan_only)]."""
     thread_id = thread_id or str(uuid.uuid4())
     graph = _build_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -144,6 +170,7 @@ def run_graph(prompt: str, thread_id: str | None = None) -> dict:
         "messages": result["messages"],
         "current_plan": result["current_plan"],
         "status": result["status"],
+        "routed_intent": result.get("routed_intent"),
         "evaluation_result": result.get("evaluation_result"),
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import Link from "next/link";
 import { ApprovalPanel } from "./components/ApprovalPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -23,6 +24,7 @@ type StatusResponse = {
   current_node: string | null;
   messages: Array<{ role: string; content: string }>;
   current_plan: string;
+  routed_intent?: string;
   evaluation_result: Record<string, unknown> | null;
   thread_id?: string;
   __interrupt__?: InterruptPayload;
@@ -34,6 +36,7 @@ type PlanResponse = { content: string; error?: string };
 type HealthResponse = {
   backend: string;
   ollama: { ok: boolean; message: string };
+  docker: { ok: boolean; message: string };
   langsmith: { ok: boolean; warning: string | null };
   warnings: string[];
 };
@@ -55,10 +58,12 @@ function extractTaskDescription(interrupt: InterruptPayload | undefined): string
 }
 
 const NODE_LABELS: Record<string, string> = {
+  router: "Routing intent...",
   planner: "Planner is thinking...",
   approval: "Awaiting approval...",
   coder: "Coder is writing...",
   evaluator: "Evaluator is testing...",
+  explorer: "Exploring codebase...",
 };
 
 function getStatusLabel(status: ExecutionStatus, node: string | null): string {
@@ -80,6 +85,7 @@ export default function Dashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [backendUnreachable, setBackendUnreachable] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -118,14 +124,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  const startPolling = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => {
-      fetchStatus();
-      fetchPlan();
-    }, 800);
-  }, [fetchStatus, fetchPlan]);
-
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -133,12 +131,50 @@ export default function Dashboard() {
     }
   }, []);
 
+  const disconnectSSE = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    stopPolling();
+  }, [stopPolling]);
+
+  const connectSSE = useCallback(() => {
+    if (eventSourceRef.current) return;
+    const url = `${API_BASE}/api/status/stream`;
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data) as StatusResponse;
+        setStatus(data);
+        setBackendUnreachable(false);
+        if (data.status === "done" || data.status === "error") {
+          disconnectSSE();
+          fetchPlan();
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+    es.onerror = () => {
+      disconnectSSE();
+      fetchStatus(); // fallback to one-time fetch
+    };
+  }, [fetchStatus, fetchPlan, disconnectSSE]);
+
+  const startStreaming = useCallback(() => {
+    if (eventSourceRef.current) return; // already streaming
+    connectSSE();
+    pollRef.current = setInterval(fetchPlan, 3000);
+  }, [connectSSE, fetchPlan]);
+
   useEffect(() => {
     fetchHealth();
     fetchStatus();
     fetchPlan();
-    return () => stopPolling();
-  }, [fetchHealth, fetchStatus, fetchPlan, stopPolling]);
+    return () => disconnectSSE();
+  }, [fetchHealth, fetchStatus, fetchPlan, disconnectSSE]);
 
   useEffect(() => {
     const t = setInterval(fetchHealth, 15000);
@@ -150,13 +186,13 @@ export default function Dashboard() {
       status?.status === "running" ||
       status?.status === "awaiting_approval"
     )
-      startPolling();
+      startStreaming();
     else if (status?.status === "done" || status?.status === "error") {
-      stopPolling();
+      disconnectSSE();
       fetchStatus();
       fetchPlan();
     }
-  }, [status?.status, startPolling, stopPolling, fetchStatus, fetchPlan]);
+  }, [status?.status, startStreaming, disconnectSSE, fetchStatus, fetchPlan]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -169,7 +205,7 @@ export default function Dashboard() {
         body: JSON.stringify({ prompt: prompt.trim() }),
       });
       if (res.ok) {
-        startPolling();
+        startStreaming();
         fetchStatus();
       }
     } finally {
@@ -194,34 +230,75 @@ export default function Dashboard() {
         }),
       });
       if (res.ok) {
-        startPolling();
+        startStreaming();
         fetchStatus();
       }
     },
-    [status?.thread_id, startPolling, fetchStatus]
+    [status?.thread_id, startStreaming, fetchStatus]
   );
 
   const lastUserMessage = status?.messages?.find((m) => m.role === "user");
   const lastAgentMessage = [...(status?.messages ?? [])]
     .reverse()
     .find((m) =>
-      ["assistant", "planner", "coder"].includes(String(m.role))
+      ["assistant", "router", "planner", "coder", "explorer"].includes(String(m.role))
     );
   const evalResult = status?.evaluation_result;
 
   return (
-    <div className="flex h-screen flex-col bg-[#050508] text-zinc-100">
-      <header className="border-b border-[#1f1f24] px-6 py-4 bg-black/30">
-        <h1 className="text-xl font-semibold tracking-tight bg-gradient-to-r from-red-600 via-amber-600 to-violet-500 bg-clip-text text-transparent">
-          Exegol Control Dashboard
-        </h1>
-        <p className="text-xs text-zinc-500 mt-1">Sith-powered agent orchestration</p>
+    <div className="flex h-screen flex-col bg-[#050508] text-zinc-100 relative overflow-hidden">
+      {/* Subtle lightning bolt background accent */}
+      <div className="absolute top-0 right-0 w-64 h-64 opacity-[0.04] pointer-events-none bg-gradient-to-bl from-violet-500 to-transparent" />
+      <div className="absolute bottom-0 left-0 w-48 h-48 opacity-[0.03] pointer-events-none bg-gradient-to-tr from-amber-600 to-transparent" />
+      <header className="relative border-b border-[#1f1f24] px-6 py-4 bg-black/30">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-wide bg-gradient-to-r from-red-600 via-amber-600 to-violet-500 bg-clip-text text-transparent font-[family-name:var(--font-orbitron)]">
+              EXEGOL CONTROL DASHBOARD
+            </h1>
+            <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+              <span className="text-[10px] text-violet-500/80">⚡</span>
+              Sith-powered agent orchestration
+            </p>
+          </div>
+          <a
+            href="/manager"
+            className="text-sm text-zinc-400 hover:text-violet-400 transition-colors"
+          >
+            Manager Dashboard →
+          </a>
+        </div>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Main content: Activity Feed */}
         <main className="flex-1 flex flex-col min-w-0 border-r border-[#1f1f24]">
           <div className="flex-1 overflow-auto p-6 space-y-6">
+            {/* System readiness panel */}
+            <section className="rounded-lg border border-[#1f1f24] bg-zinc-900/30 p-4">
+              <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
+                System readiness
+              </h2>
+              <div className="flex flex-wrap gap-3">
+                <span className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium ${backendUnreachable ? "bg-red-500/20 text-red-400" : "bg-emerald-500/10 text-emerald-400"}`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                  Backend {backendUnreachable ? "unreachable" : "OK"}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium ${health?.ollama?.ok ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                  Ollama {health?.ollama?.ok ? "OK" : (health ? "—" : "…")}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium ${health?.docker?.ok ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                  Docker {health?.docker?.ok ? "OK" : (health ? "—" : "…")}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium ${health?.langsmith?.warning ? "bg-amber-500/10 text-amber-400" : "bg-emerald-500/10 text-emerald-400"}`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                  LangSmith {health?.langsmith?.warning ? "key missing" : "OK"}
+                </span>
+              </div>
+            </section>
+
             {backendUnreachable && (
               <div className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3">
                 <p className="font-medium text-red-400">Backend unreachable</p>
@@ -229,7 +306,7 @@ export default function Dashboard() {
                   Cannot connect to the FastAPI backend at {API_BASE}. Make sure the backend is running:
                 </p>
                 <code className="mt-2 block text-xs text-zinc-400">
-                  cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+                  cd backend && python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
                 </code>
               </div>
             )}
@@ -238,16 +315,26 @@ export default function Dashboard() {
               <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
                 <p className="font-medium text-amber-400">Ollama is not running</p>
                 <p className="mt-1 text-sm text-zinc-300">{health.ollama.message}</p>
-                <p className="mt-2 text-xs text-zinc-400">Start Ollama, then run: ollama pull qwen2.5-coder</p>
+                <p className="mt-2 text-xs text-zinc-400">Start Ollama with <code className="text-amber-300/90">ollama serve</code>, then run <code className="text-amber-300/90">ollama pull qwen2.5-coder</code></p>
               </div>
             )}
 
-            {health?.warnings && health.warnings.length > 0 && (
+            {health && !health.docker?.ok && (
+              <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
+                <p className="font-medium text-amber-400">Docker / Sandbox image not ready</p>
+                <p className="mt-1 text-sm text-zinc-300">{health.docker?.message ?? "Docker or sandbox image missing"}</p>
+                <p className="mt-2 text-xs text-zinc-400">Build the sandbox: <code className="text-amber-300/90">.\build_sandbox.ps1</code> or <code className="text-amber-300/90">docker build -f Dockerfile.sandbox -t exegol-sandbox-mcp:latest .</code></p>
+              </div>
+            )}
+
+            {health?.langsmith?.warning && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
-                <p className="font-medium text-amber-400">Configuration warning</p>
-                {health.warnings.map((w, i) => (
-                  <p key={i} className="mt-1 text-sm text-zinc-300">{w}</p>
-                ))}
+                <p className="font-medium text-amber-400">LangSmith API key warning</p>
+                <p className="mt-1 text-sm text-zinc-300">Tracing is enabled but no API key is set. You may see 401 errors in logs.</p>
+                <ol className="mt-2 text-sm text-zinc-400 space-y-1 list-decimal list-inside">
+                  <li><strong>Option A:</strong> Set <code className="text-amber-300/90">LANGCHAIN_API_KEY</code> in <code className="text-amber-300/90">backend/.env</code> (see <code className="text-amber-300/90">backend/.env.example</code>)</li>
+                  <li><strong>Option B:</strong> Set <code className="text-amber-300/90">LANGCHAIN_TRACING_V2=false</code> in <code className="text-amber-300/90">backend/.env</code> to disable tracing</li>
+                </ol>
               </div>
             )}
 
@@ -323,6 +410,17 @@ export default function Dashboard() {
                       ? lastAgentMessage.content
                       : JSON.stringify(lastAgentMessage.content)}
                   </p>
+                  <Link
+                    href={`/manager?coach=1&drifted_context=${encodeURIComponent(
+                      (typeof lastAgentMessage.content === "string"
+                        ? lastAgentMessage.content
+                        : JSON.stringify(lastAgentMessage.content)
+                      ).slice(0, 500)
+                    )}`}
+                    className="mt-2 inline-block text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                  >
+                    Flag as drifted → Coach Agent
+                  </Link>
                 </div>
               </section>
             )}
@@ -353,6 +451,7 @@ export default function Dashboard() {
                 disabled={
                   backendUnreachable ||
                   (health && !health.ollama.ok) ||
+                  (health?.docker && !health.docker.ok) ||
                   isSubmitting ||
                   status?.status === "running" ||
                   status?.status === "awaiting_approval"
@@ -363,6 +462,7 @@ export default function Dashboard() {
                 disabled={
                   backendUnreachable ||
                   (health && !health.ollama.ok) ||
+                  (health?.docker && !health.docker.ok) ||
                   !prompt.trim() ||
                   isSubmitting ||
                   status?.status === "running" ||

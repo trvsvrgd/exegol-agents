@@ -1,0 +1,21 @@
+# Exegol Sandbox MCP Server
+# Runs inside a container with /workspace bind-mounted from host.
+# Provides filesystem, bash, and pytest tools scoped to the workspace.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install sandbox MCP server dependencies
+COPY sandbox_mcp/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the MCP server
+COPY sandbox_mcp/server.py .
+
+# /workspace is provided by bind mount at runtime
+ENV WORKSPACE=/workspace
+
+# Safeguard: max 10 min container lifetime to prevent runaway containers
+ENV CONTAINER_MAX_SEC=600
+
+ENTRYPOINT ["timeout", "-k", "5", "600", "python", "-u", "server.py"]
