@@ -1,5 +1,8 @@
 # Agents
 
+## PLAN.md Sync
+When implementing any task that maps to a PLAN.md checklist item, **mark it complete in PLAN.md in the same session**. Update PLAN.md before new features and after completing roadmap tasks.
+
 ## Cursor Cloud specific instructions
 
 ### Services overview

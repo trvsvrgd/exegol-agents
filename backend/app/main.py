@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.graph import build_and_stream_graph, stream_resume_graph
 from app.logging_config import LOG_PATH
+from app.memory.vector_store import add_to_memory, TYPE_SOP
 
 # Load .env from backend/ so LangSmith and other vars work
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -68,6 +69,14 @@ class DecisionRequest(BaseModel):
     thread_id: str
     decision: str  # "approve" | "edit" | "reject"
     edited_plan: str | None = None
+
+
+class CoachRequest(BaseModel):
+    """Request body for Agent Manager coaching: add a correction as a new SOP."""
+
+    correction: str  # The SOP/correction to remember (required)
+    drifted_context: str | None = None  # What the agent did wrong (optional)
+    thread_id: str | None = None  # Optional traceability
 
 
 def _apply_state_update(update: dict) -> None:
@@ -222,8 +231,8 @@ def _check_langsmith_config() -> tuple[bool, str | None]:
     if tracing and not api_key:
         return True, (
             "LangSmith tracing is enabled but LANGCHAIN_API_KEY is empty. "
-            "You may see 401 auth errors in logs. "
-            "Either set LANGCHAIN_API_KEY in backend/.env or set LANGCHAIN_TRACING_V2=false to disable tracing."
+            "Option A: Set LANGCHAIN_API_KEY in backend/.env (see backend/.env.example). "
+            "Option B: Set LANGCHAIN_TRACING_V2=false in backend/.env to disable tracing."
         )
     return True, None
 
@@ -543,6 +552,32 @@ async def run(request: RunRequest, background_tasks: BackgroundTasks):
         "thread_id": thread_id,
         "message": "Execution started. Poll /api/status for progress. When status is awaiting_approval, submit decision via POST /api/decision.",
     }
+
+
+@app.post("/api/coach")
+async def coach_agent(request: CoachRequest):
+    """
+    Agent Manager coaching: flag a drifted response and add a correction as a new SOP.
+    The correction is written to the Coordinator's long-term vector memory and will
+    be retrieved when relevant for future routing and planning.
+    """
+    correction = (request.correction or "").strip()
+    if not correction:
+        return {"status": "error", "message": "correction is required and cannot be empty"}
+
+    metadata: dict = {"source": "coaching"}
+    if request.drifted_context:
+        metadata["drifted_context"] = request.drifted_context[:1000]
+    if request.thread_id:
+        metadata["thread_id"] = request.thread_id
+
+    await asyncio.to_thread(
+        add_to_memory,
+        content=correction,
+        doc_type=TYPE_SOP,
+        metadata=metadata,
+    )
+    return {"status": "ok", "message": "SOP added to agent memory. Future runs will use this guidance."}
 
 
 @app.post("/api/decision")
